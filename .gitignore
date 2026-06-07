@@ -1,0 +1,57 @@
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+*.jar
+*.war
+*.ear
+
+# Compiled Java files
+*.class
+
+# Logs
+*.log
+log/
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+.Directory
+*.swp
+*.swo
+*~
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# IDE - Eclipse
+.settings/
+.project
+.classpath
+*.prefs
+
+# IDE - VS Code
+.vscode/
+*.code-workspace
+
+# IDE - NetBeans
+nbproject/
+nbactions.xml
+nb-configuration.xml
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Dependency directories
+node_modules/
