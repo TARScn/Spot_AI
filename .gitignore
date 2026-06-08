@@ -53,5 +53,9 @@ build/
 .env.local
 .env.*.local
 
+# Agent skills source (cloned repo)
+.kilo/
+
 # Dependency directories
 node_modules/
+web/dist/

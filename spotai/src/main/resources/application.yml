@@ -1,0 +1,23 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: spotai
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/spotai_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 000000
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      password: 540788
+      timeout: 3s
+
+spotai:
+  auth:
+    code-ttl-minutes: 5
+    token-ttl-minutes: 30
