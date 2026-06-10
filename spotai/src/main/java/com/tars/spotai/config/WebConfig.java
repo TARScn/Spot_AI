@@ -30,6 +30,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .excludePathPatterns(
                         "/user/code",
                         "/user/login",
+                        "/shop/**",
                         "/error",
                         "/favicon.ico",
                         "/",
