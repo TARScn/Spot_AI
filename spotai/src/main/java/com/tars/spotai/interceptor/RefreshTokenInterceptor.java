@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 public class RefreshTokenInterceptor implements HandlerInterceptor {
+    /* 1. 依赖注入 */
     private final StringRedisTemplate stringRedisTemplate;
     private final AuthProperties authProperties;
 
@@ -30,19 +31,23 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
         this.authProperties = authProperties;
     }
 
+    /* 2. 请求前置处理：解析 Token → 加载用户 → 刷新 TTL */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        /* 2.1 从请求头中提取 token */
         String token = resolveToken(request);
         if (!StringUtils.hasText(token)) {
-            return true;
+            return true; // 无 token 仍放行，后续 LoginInterceptor 拦截
         }
 
+        /* 2.2 从 Redis Hash 中加载用户信息 */
         String key = RedisConstants.LOGIN_TOKEN_KEY + token;
         Map<Object, Object> userMap = stringRedisTemplate.opsForHash().entries(key);
         if (userMap == null || userMap.isEmpty()) {
-            return true;
+            return true; // token 过期或无效，放行由 LoginInterceptor 拒绝
         }
 
+        /* 2.3 写入 UserHolder 并刷新 token 有效期 */
         UserDTO user = new UserDTO(
                 Long.valueOf(String.valueOf(userMap.get("id"))),
                 String.valueOf(userMap.get("nickName")),
@@ -53,15 +58,13 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
         return true;
     }
 
+    /* 3. 请求完成后清理 ThreadLocal */
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
         UserHolder.removeUser();
     }
 
-    /**
-     * Extracts the Bearer token from the Authorization header.
-     * Checks both "Authorization" and "authorization" header names.
-     */
+    /* 4. 从 Authorization 头中提取 Bearer token */
     private String resolveToken(HttpServletRequest request) {
         String authorization = request.getHeader("Authorization");
         if (!StringUtils.hasText(authorization)) {

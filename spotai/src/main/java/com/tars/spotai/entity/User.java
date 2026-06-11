@@ -13,11 +13,14 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @NoArgsConstructor
 public class User {
+    /* 1. 标识 */
     private Long id;
     private String phone;
     private String password;
     private String nickName;
     private String icon;
+
+    /* 2. 时间戳 */
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

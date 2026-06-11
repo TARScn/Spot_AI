@@ -14,23 +14,20 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 public class ShopController {
+    /* 1. 依赖注入 */
     private final ShopService shopService;
 
     public ShopController(ShopService shopService) {
         this.shopService = shopService;
     }
 
-    /**
-     * Returns shop detail by ID. Uses Redis cache in the service layer.
-     */
+    /* 2. 根据 ID 查询商户详情（缓存加速） */
     @GetMapping("/shop/{id}")
     public Result<Shop> queryShopById(@PathVariable Long id) {
         return shopService.queryById(id);
     }
 
-    /**
-     * Updates shop data and removes the old Redis cache.
-     */
+    /* 3. 更新商户信息并失效缓存 */
     @PutMapping("/shop")
     public Result<Void> updateShop(@RequestBody Shop shop) {
         return shopService.update(shop);

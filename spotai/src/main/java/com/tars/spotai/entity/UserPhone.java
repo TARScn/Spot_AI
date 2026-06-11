@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 public class UserPhone {
-    private Long id;
-    private Long userId;
-    private String phone;
+    private Long id;      // 主键
+    private Long userId;  // 关联的用户 ID
+    private String phone; // 手机号
 }

@@ -16,15 +16,14 @@ import java.time.LocalDateTime;
  */
 @Repository
 public class ShopRepository {
+    /* 1. 依赖注入 */
     private final JdbcTemplate jdbcTemplate;
 
     public ShopRepository(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * Finds a shop by ID. Returns null when the shop does not exist.
-     */
+    /* 2. 根据 ID 查询商户（不存在返回 null） */
     public Shop findById(Long id) {
         try {
             return jdbcTemplate.queryForObject(
@@ -43,9 +42,7 @@ public class ShopRepository {
         }
     }
 
-    /**
-     * Updates a shop by ID. Returns affected row count.
-     */
+    /* 3. 更新商户信息，返回影响行数 */
     public int updateById(Shop shop) {
         return jdbcTemplate.update(
                 """
@@ -82,6 +79,7 @@ public class ShopRepository {
         );
     }
 
+    /* 4. 行映射器：ResultSet → Shop */
     private static class ShopRowMapper implements RowMapper<Shop> {
         @Override
         public Shop mapRow(ResultSet rs, int rowNum) throws SQLException {

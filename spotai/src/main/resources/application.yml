@@ -16,8 +16,29 @@ spring:
       database: 0
       password: 540788
       timeout: 3s
+  kafka:
+    bootstrap-servers: localhost:19092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+    consumer:
+      group-id: spotai-voucher-order
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.tars.spotai.dto
+        spring.json.value.default.type: com.tars.spotai.dto.VoucherOrderMessage
+    listener:
+      ack-mode: record
 
 spotai:
   auth:
     code-ttl-minutes: 5
     token-ttl-minutes: 30
+  voucher:
+    order-topic: spotai.voucher-order.create
+    order-dlt-topic: spotai.voucher-order.create.dlt

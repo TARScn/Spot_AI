@@ -18,19 +18,18 @@ import java.time.LocalDateTime;
  */
 @Repository
 public class UserRepository {
+    /* 1. 依赖注入 */
     private final JdbcTemplate jdbcTemplate;
 
     public UserRepository(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * Looks up a user by phone number. First queries the phone-index table to find the user ID,
-     * then queries the user table. Returns null if the phone is not found.
-     */
+    /* 2. 根据手机号查找用户（双表查询：phone-index → user） */
     public User findByPhone(String phone) {
         String phoneTable = ShardUtils.userPhoneTable(phone);
         String userTable = ShardUtils.userTable(phone);
+        /* 2.1 在 phone-index 表中查询 user_id */
         Long userId;
         try {
             userId = jdbcTemplate.queryForObject(
@@ -44,6 +43,7 @@ public class UserRepository {
         if (userId == null) {
             return null;
         }
+        /* 2.2 在 user 表中查询完整用户信息 */
         try {
             return jdbcTemplate.queryForObject(
                     "select id, phone, password, nick_name, icon, create_time, update_time from " + userTable + " where id = ?",
@@ -55,13 +55,12 @@ public class UserRepository {
         }
     }
 
-    /**
-     * Atomically saves a new user and its phone-index record in a single transaction.
-     */
+    /* 3. 事务性保存用户及其手机号索引 */
     @Transactional
     public void saveUserWithPhone(User user, Long userPhoneId) {
         String userTable = ShardUtils.userTable(user.getPhone());
         String phoneTable = ShardUtils.userPhoneTable(user.getPhone());
+        /* 3.1 插入用户表 */
         jdbcTemplate.update(
                 "insert into " + userTable + " (id, phone, password, nick_name, icon, create_time, update_time) values (?, ?, ?, ?, ?, ?, ?)",
                 user.getId(),
@@ -72,6 +71,7 @@ public class UserRepository {
                 user.getCreateTime(),
                 user.getUpdateTime()
         );
+        /* 3.2 插入手机号索引表 */
         jdbcTemplate.update(
                 "insert into " + phoneTable + " (id, user_id, phone, create_time, update_time) values (?, ?, ?, ?, ?)",
                 userPhoneId,
@@ -82,9 +82,7 @@ public class UserRepository {
         );
     }
 
-    /**
-     * Maps a JDBC result set row to a {@link User} entity.
-     */
+    /* 4. 行映射器：ResultSet → User */
     private static class UserRowMapper implements RowMapper<User> {
         @Override
         public User mapRow(ResultSet rs, int rowNum) throws SQLException {

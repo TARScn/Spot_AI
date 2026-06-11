@@ -4,32 +4,44 @@ package com.tars.spotai.utils;
  * Centralized constants for Redis key prefixes used across the application.
  */
 public final class RedisConstants {
-    /** Key prefix for cached login verification codes (suffix: phone number). */
+    /* ---- Key 前缀 ---- */
+    /** 1. 登录验证码缓存 key（后缀：手机号） */
     public static final String LOGIN_CODE_KEY = "login:code:";
 
-    /** Key prefix for cached login tokens (suffix: token string). */
+    /** 2. 登录 Token 缓存 key（后缀：token 字符串） */
     public static final String LOGIN_TOKEN_KEY = "login:token:";
 
-    /** Key prefix for cached shop details (suffix: shop ID). */
+    /** 3. 商户详情缓存 key（后缀：商户 ID） */
     public static final String CACHE_SHOP_KEY = "cache:shop:";
 
-    /** TTL for cached shop details, in minutes. */
+    /** 4. 秒杀券 Redis 库存 key（后缀：优惠券 ID） */
+    public static final String SECKILL_STOCK_KEY = "seckill:stock:";
+
+    /** 5. 秒杀券已下单用户集合 key（后缀：优惠券 ID） */
+    public static final String SECKILL_ORDER_KEY = "seckill:order:";
+
+    /* ---- TTL 配置 ---- */
+    /** 6. 商户缓存 TTL（分钟） */
     public static final long CACHE_SHOP_TTL_MINUTES = 30L;
 
-    /** Max random extra TTL for ordinary caches, in seconds. */
+    /** 7. 缓存随机加成 TTL 上限（秒），用于防缓存雪崩 */
     public static final long CACHE_RANDOM_TTL_SECONDS = 300L;
 
-    /** Key prefix for cache rebuild locks (suffix: resource ID). */
+    /* ---- 缓存重建锁 ---- */
+    /** 8. 商户缓存重建锁 key（后缀：资源 ID） */
     public static final String LOCK_SHOP_KEY = "lock:shop:";
 
-    /** TTL for shop cache rebuild locks, in seconds. */
+    /** 9. 商户缓存重建锁 TTL（秒） */
     public static final long LOCK_SHOP_TTL_SECONDS = 10L;
 
-    /** Default TTL for cache rebuild locks, in seconds. */
+    /** 10. 缓存重建锁默认 TTL（秒） */
     public static final long CACHE_REBUILD_LOCK_TTL_SECONDS = 10L;
 
-    /** TTL for cached empty shop values, in minutes. */
+    /** 11. 空值缓存 TTL（分钟），用于防缓存穿透 */
     public static final long CACHE_NULL_TTL_MINUTES = 2L;
+
+    /** 12. 秒杀订单用户维度锁 key（后缀：userId:voucherId） */
+    public static final String LOCK_VOUCHER_ORDER_KEY = "lock:order:";
 
     private RedisConstants() {
     }

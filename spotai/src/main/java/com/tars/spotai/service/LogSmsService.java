@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 public class LogSmsService implements SmsService {
     private static final Logger log = LoggerFactory.getLogger(LogSmsService.class);
 
+    /* 将验证码输出到日志（开发/测试环境替代真实短信发送） */
     @Override
     public void sendCode(String phone, String code) {
         log.info("SpotAI login code for phone {} is {}", phone, code);

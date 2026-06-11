@@ -17,32 +17,26 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 public class UserController {
+    /* 1. 依赖注入 */
     private final UserService userService;
 
     public UserController(UserService userService) {
         this.userService = userService;
     }
 
-    /**
-     * Sends a login verification code to the given phone number.
-     */
+    /* 2. 发送登录验证码 */
     @PostMapping("/user/code")
     public Result<Void> code(@RequestParam String phone) {
         return userService.sendCode(phone);
     }
 
-    /**
-     * Logs in with phone number and verification code.
-     * Returns a token on success.
-     */
+    /* 3. 手机号 + 验证码登录，成功返回 token */
     @PostMapping("/user/login")
     public Result<String> login(@Valid @RequestBody LoginFormDTO loginForm) {
         return userService.login(loginForm);
     }
 
-    /**
-     * Returns the currently authenticated user's profile.
-     */
+    /* 4. 获取当前登录用户信息 */
     @GetMapping("/user/me")
     public Result<UserDTO> me() {
         return userService.me();

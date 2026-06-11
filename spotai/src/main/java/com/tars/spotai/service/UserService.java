@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class UserService {
+    /* 1. 依赖注入 */
     private final StringRedisTemplate stringRedisTemplate;
     private final UserRepository userRepository;
     private final SmsService smsService;
@@ -43,14 +44,15 @@ public class UserService {
         this.authProperties = authProperties;
     }
 
-    /**
-     * Sends a 6-digit verification code to the given phone number.
-     * Validates the phone format first and caches the code in Redis.
-     */
+    /* ========== 业务方法 ========== */
+
+    /* 2. 发送验证码 */
     public Result<Void> sendCode(String phone) {
+        /* 2.1 校验手机号格式 */
         if (RegexUtils.isPhoneInvalid(phone)) {
             return Result.fail("手机号格式错误");
         }
+        /* 2.2 生成 6 位随机码并缓存到 Redis */
         String code = String.format("%06d", random.nextInt(1_000_000));
         stringRedisTemplate.opsForValue().set(
                 RedisConstants.LOGIN_CODE_KEY + phone,
@@ -58,18 +60,17 @@ public class UserService {
                 authProperties.getCodeTtlMinutes(),
                 TimeUnit.MINUTES
         );
+        /* 2.3 发送验证码（开发环境为日志输出） */
         smsService.sendCode(phone, code);
         return Result.ok(null);
     }
 
-    /**
-     * Authenticates the user with phone and verification code.
-     * On success, creates a token, caches user info in Redis, and returns the token.
-     * Auto-registers the user if the phone number is new.
-     */
+    /* 3. 登录（手机号 + 验证码） */
     public Result<String> login(LoginFormDTO loginForm) {
         String phone = loginForm.getPhone();
         String code = loginForm.getCode();
+
+        /* 3.1 参数校验 */
         if (RegexUtils.isPhoneInvalid(phone)) {
             return Result.fail("手机号格式错误");
         }
@@ -77,17 +78,20 @@ public class UserService {
             return Result.fail("验证码格式错误");
         }
 
+        /* 3.2 校验验证码 */
         String cacheCode = stringRedisTemplate.opsForValue().get(RedisConstants.LOGIN_CODE_KEY + phone);
         if (!StringUtils.hasText(cacheCode) || !cacheCode.equals(code)) {
             return Result.fail("验证码错误或已过期");
         }
 
+        /* 3.3 查询或创建用户 */
         User user = userRepository.findByPhone(phone);
         if (user == null) {
             user = createUser(phone);
             userRepository.saveUserWithPhone(user, IdWorker.getId());
         }
 
+        /* 3.4 生成 Token，存入 Redis Hash */
         String token = compactUuid();
         UserDTO userDTO = toUserDTO(user);
         Map<String, String> userMap = new HashMap<>();
@@ -102,9 +106,7 @@ public class UserService {
         return Result.ok(token);
     }
 
-    /**
-     * Returns the profile of the currently logged-in user from the request context.
-     */
+    /* 4. 获取当前登录用户信息 */
     public Result<UserDTO> me() {
         UserDTO user = UserHolder.getUser();
         if (user == null) {
@@ -113,6 +115,9 @@ public class UserService {
         return Result.ok(user);
     }
 
+    /* ========== 私有辅助方法 ========== */
+
+    /* 5. 创建新用户 */
     private User createUser(String phone) {
         LocalDateTime now = LocalDateTime.now();
         User user = new User();
@@ -126,10 +131,12 @@ public class UserService {
         return user;
     }
 
+    /* 6. User -> UserDTO */
     private UserDTO toUserDTO(User user) {
         return new UserDTO(user.getId(), user.getNickName(), user.getIcon());
     }
 
+    /* 7. 生成无横线的 UUID */
     private String compactUuid() {
         return UUID.randomUUID().toString().replace("-", "");
     }

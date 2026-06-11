@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ShardUtilsTest {
 
+    /* 验证手机号分片路由在合法范围内且表名一致 */
     @Test
     void routesPhoneToKnownUserAndPhoneTables() {
         String phone = "13800138000";

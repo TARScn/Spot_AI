@@ -8,6 +8,7 @@ import lombok.Data;
  */
 @Data
 public class LoginFormDTO {
+    /* 1. 登录凭证 */
     @NotBlank(message = "手机号不能为空")
     private String phone;
 

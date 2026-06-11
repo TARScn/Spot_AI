@@ -8,22 +8,23 @@ import com.tars.spotai.dto.UserDTO;
  * after request completion.
  */
 public final class UserHolder {
+    /* 1. 存储介质：ThreadLocal */
     private static final ThreadLocal<UserDTO> USERS = new ThreadLocal<>();
 
     private UserHolder() {
     }
 
-    /** Stores the current user in the request thread. */
+    /* 2. 将当前用户存入线程 */
     public static void saveUser(UserDTO user) {
         USERS.set(user);
     }
 
-    /** Returns the current user, or null if not authenticated. */
+    /* 3. 获取当前线程中的用户（未认证时返回 null） */
     public static UserDTO getUser() {
         return USERS.get();
     }
 
-    /** Removes the current user from the thread to prevent memory leaks. */
+    /* 4. 请求结束后清理，防止内存泄漏 */
     public static void removeUser() {
         USERS.remove();
     }

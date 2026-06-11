@@ -23,6 +23,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ShopServiceTest {
+    /* 1. Mock 依赖 */
     @Mock
     private ShopRepository shopRepository;
 
@@ -31,13 +32,17 @@ class ShopServiceTest {
 
     private ShopService shopService;
 
+    /* 2. 测试初始化 */
     @BeforeEach
     void setUp() {
         shopService = new ShopService(shopRepository, cacheClient);
     }
 
+    /* ========== queryById() 测试 ========== */
+
     @Test
     void queriesShopThroughCacheClient() {
+        /* 1. 正常查询：CacheClient 返回商户 → service 返回成功 */
         Shop shop = shop(1L);
         when(cacheClient.queryWithLogicalExpire(
                 eq(RedisConstants.CACHE_SHOP_KEY),
@@ -57,6 +62,7 @@ class ShopServiceTest {
 
     @Test
     void returnsFailureWhenCacheClientReturnsNull() {
+        /* 2. 商户不存在：CacheClient 返回 null → service 返回 "商户不存在" */
         long missingId = 404L;
         when(cacheClient.queryWithLogicalExpire(
                 eq(RedisConstants.CACHE_SHOP_KEY),
@@ -76,6 +82,7 @@ class ShopServiceTest {
 
     @Test
     void rejectsInvalidShopIdBeforeQueryingCache() {
+        /* 3. 不合法的 ID：不查缓存直接返回 "商户ID不合法" */
         Result<Shop> result = shopService.queryById(0L);
 
         assertThat(result.isSuccess()).isFalse();
@@ -83,8 +90,11 @@ class ShopServiceTest {
         verify(cacheClient, never()).queryWithLogicalExpire(any(), any(), any(), any(), any(Long.class), any(), any());
     }
 
+    /* ========== setShopWithLogicalExpire() 测试 ========== */
+
     @Test
     void writesLogicalExpireCacheForWarmUp() {
+        /* 4. 缓存预热/重建委托给 CacheClient */
         Shop shop = shop(2L);
 
         shopService.setShopWithLogicalExpire(shop.getId(), shop, 30, TimeUnit.MINUTES);
@@ -92,8 +102,11 @@ class ShopServiceTest {
         verify(cacheClient).setWithLogicalExpire(RedisConstants.CACHE_SHOP_KEY + shop.getId(), shop, 30, TimeUnit.MINUTES);
     }
 
+    /* ========== update() 测试 ========== */
+
     @Test
     void updatesDatabaseAndDeletesCacheWhenShopExists() {
+        /* 5. 更新成功：写 DB + 删缓存 */
         Shop shop = shop(3L);
         when(shopRepository.updateById(shop)).thenReturn(1);
 
@@ -106,6 +119,7 @@ class ShopServiceTest {
 
     @Test
     void returnsFailureAndKeepsCacheWhenUpdatedShopDoesNotExist() {
+        /* 6. 更新失败（DB 无记录）：不删缓存，返回 "商户不存在" */
         Shop shop = shop(404L);
         when(shopRepository.updateById(shop)).thenReturn(0);
 
@@ -115,6 +129,8 @@ class ShopServiceTest {
         assertThat(result.getErrorMsg()).isEqualTo("商户不存在");
         verify(cacheClient, never()).delete(RedisConstants.CACHE_SHOP_KEY + shop.getId());
     }
+
+    /* ========== 测试辅助方法 ========== */
 
     private Shop shop(Long id) {
         Shop shop = new Shop();

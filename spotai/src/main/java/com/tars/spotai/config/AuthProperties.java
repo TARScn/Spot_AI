@@ -8,10 +8,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "spotai.auth")
 public class AuthProperties {
-    /** Verification code TTL in minutes (default 5). */
+    /* 1. 验证码有效期（分钟），默认 5 分钟 */
     private long codeTtlMinutes = 5;
 
-    /** Login token TTL in minutes (default 30). */
+    /* 2. Token 有效期（分钟），默认 30 分钟 */
     private long tokenTtlMinutes = 30;
 
     public long getCodeTtlMinutes() {

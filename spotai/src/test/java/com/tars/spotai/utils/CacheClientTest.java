@@ -28,6 +28,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class CacheClientTest {
+    /* 1. Mock 依赖 */
     @Mock
     private StringRedisTemplate stringRedisTemplate;
 
@@ -37,6 +38,7 @@ class CacheClientTest {
     private ObjectMapper objectMapper;
     private CacheClient cacheClient;
 
+    /* 2. 测试初始化 */
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
@@ -45,8 +47,11 @@ class CacheClientTest {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
+    /* ========== set() 测试 ========== */
+
     @Test
     void storesObjectAsJsonWithTtl() {
+        /* 验证 set() 写入 JSON + TTL（含随机偏移 1800~2100 秒） */
         Shop shop = shop(1L);
 
         cacheClient.set("cache:shop:1", shop, 30, TimeUnit.MINUTES);
@@ -59,8 +64,11 @@ class CacheClientTest {
         );
     }
 
+    /* ========== setWithLogicalExpire() 测试 ========== */
+
     @Test
     void storesObjectWithLogicalExpire() {
+        /* 验证 setWithLogicalExpire() 写入带有 expireTime 的 JSON */
         Shop shop = shop(1L);
 
         cacheClient.setWithLogicalExpire("cache:shop:1", shop, 30, TimeUnit.MINUTES);
@@ -68,8 +76,11 @@ class CacheClientTest {
         verify(valueOperations).set(eq("cache:shop:1"), startsWith("{\"expireTime\""));
     }
 
+    /* ========== queryWithPassThrough() 测试 ========== */
+
     @Test
     void returnsValueFromPassThroughCacheHit() throws Exception {
+        /* 1. 缓存命中：直接返回反序列化后的对象 */
         Shop cachedShop = shop(1L);
         when(valueOperations.get("cache:shop:1")).thenReturn(objectMapper.writeValueAsString(cachedShop));
 
@@ -87,6 +98,7 @@ class CacheClientTest {
 
     @Test
     void cachesEmptyValueWhenPassThroughMissesDatabase() {
+        /* 2. 缓存穿透保护：DB 无数据时缓存空值 */
         Shop result = cacheClient.queryWithPassThrough(
                 RedisConstants.CACHE_SHOP_KEY,
                 999L,
@@ -107,6 +119,7 @@ class CacheClientTest {
 
     @Test
     void returnsNullFromPassThroughCachedEmptyValueWithoutDatabaseQuery() {
+        /* 3. 空值缓存命中：不查 DB 直接返回 null */
         AtomicInteger dbCalls = new AtomicInteger();
         when(valueOperations.get("cache:shop:999")).thenReturn("");
 
@@ -126,8 +139,11 @@ class CacheClientTest {
         assertThat(dbCalls).hasValue(0);
     }
 
+    /* ========== queryWithLogicalExpire() 测试 ========== */
+
     @Test
     void returnsLogicalExpireValueWhenNotExpired() {
+        /* 4. 逻辑过期缓存未过期：直接返回，不尝试获取锁 */
         Shop cachedShop = shop(1L);
         when(valueOperations.get("cache:shop:1")).thenReturn(writeRedisData(cachedShop, LocalDateTime.now().plusMinutes(10)));
 
@@ -147,6 +163,7 @@ class CacheClientTest {
 
     @Test
     void returnsExpiredValueAndRebuildsCacheWhenLockAcquired() {
+        /* 5. 缓存过期且获取到锁：返回旧值 + 异步重建 */
         Shop expiredShop = shop(5L);
         Shop freshShop = shop(5L);
         freshShop.setName("重建后的商户");
@@ -170,6 +187,7 @@ class CacheClientTest {
 
     @Test
     void returnsExpiredValueWithoutRebuildWhenLockIsBusy() {
+        /* 6. 缓存过期但锁被占用：返回旧值，不重建 */
         Shop expiredShop = shop(6L);
         AtomicInteger dbCalls = new AtomicInteger();
         when(valueOperations.get("cache:shop:6")).thenReturn(writeRedisData(expiredShop, LocalDateTime.now().minusMinutes(1)));
@@ -192,6 +210,8 @@ class CacheClientTest {
         assertThat(dbCalls).hasValue(0);
         verify(stringRedisTemplate, never()).delete("lock:shop:6");
     }
+
+    /* ========== 测试辅助方法 ========== */
 
     private Shop shop(Long id) {
         Shop shop = new Shop();

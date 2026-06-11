@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class ShopService {
+    /* 1. 依赖注入 */
     private final ShopRepository shopRepository;
     private final CacheClient cacheClient;
 
@@ -23,15 +24,16 @@ public class ShopService {
         this.cacheClient = cacheClient;
     }
 
-    /**
-     * Queries shop detail by ID with logical expiration.
-     * Expired hot cache values are returned immediately while one background task rebuilds them.
-     */
+    /* ========== 业务方法 ========== */
+
+    /* 2. 根据 ID 查询商户（逻辑过期缓存策略） */
     public Result<Shop> queryById(Long id) {
+        /* 2.1 参数校验 */
         if (id == null || id <= 0) {
             return Result.fail("商户ID不合法");
         }
 
+        /* 2.2 查缓存（过期时异步回源，返回旧值） */
         Shop shop = cacheClient.queryWithLogicalExpire(
                 RedisConstants.CACHE_SHOP_KEY,
                 id,
@@ -47,26 +49,25 @@ public class ShopService {
         return Result.ok(shop);
     }
 
-    /**
-     * Writes a shop cache value with logical expiration. Intended for cache warm-up and rebuilds.
-     */
+    /* 3. 预写缓存（预热/重建时调用，设置逻辑过期） */
     public void setShopWithLogicalExpire(Long id, Shop shop, long ttl, TimeUnit unit) {
         cacheClient.setWithLogicalExpire(RedisConstants.CACHE_SHOP_KEY + id, shop, ttl, unit);
     }
 
-    /**
-     * Updates shop data in MySQL first, then removes the related Redis cache.
-     */
+    /* 4. 更新商户：先写 MySQL，再删缓存 */
     public Result<Void> update(Shop shop) {
+        /* 4.1 参数校验 */
         if (shop == null || shop.getId() == null || shop.getId() <= 0) {
             return Result.fail("商户ID不合法");
         }
 
+        /* 4.2 更新数据库 */
         int affectedRows = shopRepository.updateById(shop);
         if (affectedRows == 0) {
             return Result.fail("商户不存在");
         }
 
+        /* 4.3 删除缓存，下次读取时重建 */
         cacheClient.delete(RedisConstants.CACHE_SHOP_KEY + shop.getId());
         return Result.ok(null);
     }

@@ -25,14 +25,18 @@ public class LoginInterceptor implements HandlerInterceptor {
         this.objectMapper = objectMapper;
     }
 
+    /* 请求前置处理：校验登录态，未登录返回 401 */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        /* 1. 预检请求直接放行 */
         if (HttpMethod.OPTIONS.matches(request.getMethod())) {
             return true;
         }
+        /* 2. UserHolder 中有用户 → 已登录，放行 */
         if (UserHolder.getUser() != null) {
             return true;
         }
+        /* 3. 未登录 → 返回 401 + 错误信息 */
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
