@@ -43,6 +43,36 @@ public final class RedisConstants {
     /** 12. 秒杀订单用户维度锁 key（后缀：userId:voucherId） */
     public static final String LOCK_VOUCHER_ORDER_KEY = "lock:order:";
 
+    /** 13. 探店笔记点赞 ZSet key（后缀：blogId） */
+    public static final String BLOG_LIKED_KEY = "blog:liked:";
+
+    /** 14. 用户关注集合 key（后缀：userId） */
+    public static final String FOLLOW_KEY = "follows:";
+
+    /** 15. 用户粉丝集合 key（后缀：userId） */
+    public static final String FOLLOWERS_KEY = "followers:";
+
+    /** 16. 用户关注 Feed 收件箱 key（后缀：userId） */
+    public static final String FEED_KEY = "feed:user:";
+
+    /** 17. 商户 GEO key（后缀：typeId） */
+    public static final String SHOP_GEO_KEY = "shop:geo:";
+
+    /** 18. 用户签到 BitMap key（后缀：userId:yyyyMM） */
+    public static final String USER_SIGN_KEY = "sign:";
+
+    /** 19. 全站 UV HyperLogLog key（后缀：yyyyMMdd） */
+    public static final String UV_SITE_KEY = "uv:site:";
+
+    /** 20. 商户 UV HyperLogLog key（后缀：shopId:yyyyMMdd） */
+    public static final String UV_SHOP_KEY = "uv:shop:";
+
+    /** 21. 探店笔记 UV HyperLogLog key（后缀：blogId:yyyyMMdd） */
+    public static final String UV_BLOG_KEY = "uv:blog:";
+
+    /** 22. 页面 UV HyperLogLog key（后缀：pageCode:yyyyMMdd） */
+    public static final String UV_PAGE_KEY = "uv:page:";
+
     private RedisConstants() {
     }
 }

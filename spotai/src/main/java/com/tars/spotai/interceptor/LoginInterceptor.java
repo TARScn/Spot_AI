@@ -32,6 +32,9 @@ public class LoginInterceptor implements HandlerInterceptor {
         if (HttpMethod.OPTIONS.matches(request.getMethod())) {
             return true;
         }
+        if (isPublicBlogRequest(request)) {
+            return true;
+        }
         /* 2. UserHolder 中有用户 → 已登录，放行 */
         if (UserHolder.getUser() != null) {
             return true;
@@ -42,5 +45,16 @@ public class LoginInterceptor implements HandlerInterceptor {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(objectMapper.writeValueAsString(Result.fail("请先登录")));
         return false;
+    }
+
+    private boolean isPublicBlogRequest(HttpServletRequest request) {
+        if (!HttpMethod.GET.matches(request.getMethod())) {
+            return false;
+        }
+        String path = request.getRequestURI();
+        return path.matches("^/blog/\\d+$")
+                || "/blog/hot".equals(path)
+                || "/blog/of/user".equals(path)
+                || path.matches("^/blog/likes/\\d+$");
     }
 }

@@ -27,6 +27,7 @@ public class Shop {
     private Integer comments;
     private Integer score;
     private String openHours;
+    private Double distance;
 
     /* 4. 时间戳 */
     private LocalDateTime createTime;

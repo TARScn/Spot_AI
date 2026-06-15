@@ -3,6 +3,7 @@ package com.tars.spotai.controller;
 import com.tars.spotai.dto.LoginFormDTO;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.UserDTO;
+import com.tars.spotai.service.SignService;
 import com.tars.spotai.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,9 +20,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
     /* 1. 依赖注入 */
     private final UserService userService;
+    private final SignService signService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, SignService signService) {
         this.userService = userService;
+        this.signService = signService;
     }
 
     /* 2. 发送登录验证码 */
@@ -40,5 +43,15 @@ public class UserController {
     @GetMapping("/user/me")
     public Result<UserDTO> me() {
         return userService.me();
+    }
+
+    @PostMapping("/user/sign")
+    public Result<Void> sign() {
+        return signService.sign();
+    }
+
+    @GetMapping("/user/sign/count")
+    public Result<Integer> signCount() {
+        return signService.countContinuousSignDays();
     }
 }

@@ -13,11 +13,11 @@ import com.tars.spotai.repository.VoucherRepository;
 import com.tars.spotai.utils.RedisConstants;
 import com.tars.spotai.utils.RedisIdWorker;
 import com.tars.spotai.utils.UserHolder;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -61,7 +61,7 @@ public class VoucherService {
     private final ShopRepository shopRepository;
     private final RedisIdWorker redisIdWorker;
     private final StringRedisTemplate stringRedisTemplate;
-    private final KafkaTemplate<String, VoucherOrderMessage> kafkaTemplate;
+    private final RocketMQTemplate rocketMQTemplate;
     private final VoucherProperties voucherProperties;
     private final RedissonClient redissonClient;
     private final TransactionTemplate transactionTemplate;
@@ -70,7 +70,7 @@ public class VoucherService {
                           ShopRepository shopRepository,
                           RedisIdWorker redisIdWorker,
                           StringRedisTemplate stringRedisTemplate,
-                          KafkaTemplate<String, VoucherOrderMessage> kafkaTemplate,
+                          RocketMQTemplate rocketMQTemplate,
                           VoucherProperties voucherProperties,
                           RedissonClient redissonClient,
                           TransactionTemplate transactionTemplate) {
@@ -78,7 +78,7 @@ public class VoucherService {
         this.shopRepository = shopRepository;
         this.redisIdWorker = redisIdWorker;
         this.stringRedisTemplate = stringRedisTemplate;
-        this.kafkaTemplate = kafkaTemplate;
+        this.rocketMQTemplate = rocketMQTemplate;
         this.voucherProperties = voucherProperties;
         this.redissonClient = redissonClient;
         this.transactionTemplate = transactionTemplate;
@@ -154,8 +154,7 @@ public class VoucherService {
         );
 
         try {
-            kafkaTemplate.send(voucherProperties.getOrderTopic(), orderId.toString(), message)
-                    .get(3, TimeUnit.SECONDS);
+            rocketMQTemplate.syncSend(voucherProperties.getOrderTopic(), message, 3000);
         } catch (Exception e) {
             rollbackRedisSeckill(voucherId, userId, orderId, orderId, "VoucherService");
             return Result.fail("系统繁忙，请稍后重试");

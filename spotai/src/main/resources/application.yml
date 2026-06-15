@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: spotai
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 30MB
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/spotai_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
@@ -16,24 +20,11 @@ spring:
       database: 0
       password: 540788
       timeout: 3s
-  kafka:
-    bootstrap-servers: localhost:19092
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-      properties:
-        spring.json.add.type.headers: false
-    consumer:
-      group-id: spotai-voucher-order
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: com.tars.spotai.dto
-        spring.json.value.default.type: com.tars.spotai.dto.VoucherOrderMessage
-    listener:
-      ack-mode: record
+
+rocketmq:
+  name-server: localhost:9876
+  producer:
+    group: spotai-voucher-order-producer
 
 spotai:
   auth:
@@ -41,4 +32,12 @@ spotai:
     token-ttl-minutes: 30
   voucher:
     order-topic: spotai.voucher-order.create
-    order-dlt-topic: spotai.voucher-order.create.dlt
+    order-consumer-group: spotai-voucher-order-consumer
+  minio:
+    endpoint: http://localhost:9000
+    external-endpoint: http://localhost:9000
+    access-key: admin
+    secret-key: "000000"
+    bucket: spotai
+    blog-prefix: blog
+    public-read: true

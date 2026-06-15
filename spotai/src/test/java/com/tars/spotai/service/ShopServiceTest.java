@@ -10,8 +10,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,13 +31,15 @@ class ShopServiceTest {
 
     @Mock
     private CacheClient cacheClient;
+    @Mock
+    private StringRedisTemplate stringRedisTemplate;
 
     private ShopService shopService;
 
     /* 2. 测试初始化 */
     @BeforeEach
     void setUp() {
-        shopService = new ShopService(shopRepository, cacheClient);
+        shopService = new ShopService(shopRepository, cacheClient, stringRedisTemplate);
     }
 
     /* ========== queryById() 测试 ========== */
@@ -109,12 +113,14 @@ class ShopServiceTest {
         /* 5. 更新成功：写 DB + 删缓存 */
         Shop shop = shop(3L);
         when(shopRepository.updateById(shop)).thenReturn(1);
+        when(shopRepository.findAll()).thenReturn(List.of());
 
         Result<Void> result = shopService.update(shop);
 
         assertThat(result.isSuccess()).isTrue();
         verify(shopRepository).updateById(shop);
         verify(cacheClient).delete(RedisConstants.CACHE_SHOP_KEY + shop.getId());
+        verify(shopRepository).findAll();
     }
 
     @Test

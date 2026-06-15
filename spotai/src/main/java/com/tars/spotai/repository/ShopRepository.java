@@ -10,6 +10,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Repository for querying shop data from tb_shop.
@@ -40,6 +43,56 @@ public class ShopRepository {
         } catch (EmptyResultDataAccessException e) {
             return null;
         }
+    }
+
+    public List<Shop> findAll() {
+        return jdbcTemplate.query(
+                """
+                        select id, name, type_id, images, area, address, x, y,
+                               avg_price, sold, comments, score, open_hours,
+                               create_time, update_time
+                        from tb_shop
+                        """,
+                new ShopRowMapper()
+        );
+    }
+
+    public List<Shop> findByType(Long typeId, int current, int pageSize) {
+        int page = Math.max(current, 1);
+        int offset = (page - 1) * pageSize;
+        return jdbcTemplate.query(
+                """
+                        select id, name, type_id, images, area, address, x, y,
+                               avg_price, sold, comments, score, open_hours,
+                               create_time, update_time
+                        from tb_shop
+                        where type_id = ?
+                        order by id
+                        limit ?, ?
+                        """,
+                new ShopRowMapper(),
+                typeId,
+                offset,
+                pageSize
+        );
+    }
+
+    public List<Shop> findByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String placeholders = ids.stream().map(id -> "?").collect(Collectors.joining(","));
+        return jdbcTemplate.query(
+                """
+                        select id, name, type_id, images, area, address, x, y,
+                               avg_price, sold, comments, score, open_hours,
+                               create_time, update_time
+                        from tb_shop
+                        where id in (
+                        """ + placeholders + ")",
+                new ShopRowMapper(),
+                ids.toArray()
+        );
     }
 
     /* 3. 更新商户信息，返回影响行数 */

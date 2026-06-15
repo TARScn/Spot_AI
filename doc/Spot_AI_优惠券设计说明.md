@@ -8,8 +8,8 @@
 
 - 添加普通券和秒杀券时涉及的操作表。
 - 秒杀抢单阶段先使用 Redis 完成库存余量判断和一人一单判断。
-- 抢单成功后将订单任务发送到 Kafka。
-- Kafka Consumer 异步消费消息并创建订单。
+- 抢单成功后将订单任务发送到 RocketMQ。
+- RocketMQ Consumer 异步消费消息并创建订单。
 - 可使用 Redisson 实现分布式锁，解决集群环境下同一用户重复下单和多实例异步消费并发问题。
 - MySQL 乐观锁保留为最终库存兜底，避免 Redis 和数据库不一致时发生超卖。
 
@@ -164,22 +164,22 @@ POST /voucher-order/seckill/{voucherId}
 | 已过结束时间 | `秒杀已经结束` |
 | Redis 库存不足 | `库存不足` |
 | Redis 判断已下单 | `不能重复下单` |
-| Kafka 消息发送失败 | `系统繁忙，请稍后重试` |
+| RocketMQ 消息发送失败 | `系统繁忙，请稍后重试` |
 
 ## 5. 总体方案
 
 本版采用“两段式秒杀”：
 
 ```text
-请求线程：校验活动 -> Redis 原子抢单 -> 生成订单 ID -> 发送 Kafka 消息 -> 立即返回
-异步线程：Kafka Consumer 消费消息 -> Redisson 用户锁 -> 数据库查重 -> MySQL 乐观锁扣库存 -> 创建订单
+请求线程：校验活动 -> Redis 原子抢单 -> 生成订单 ID -> 发送 RocketMQ 消息 -> 立即返回
+异步线程：RocketMQ Consumer 消费消息 -> Redisson 用户锁 -> 数据库查重 -> MySQL 乐观锁扣库存 -> 创建订单
 ```
 
 这样做的目的：
 
 - 秒杀入口尽量少访问 MySQL，先由 Redis 承担高并发库存判断。
 - 请求线程不执行完整下单事务，减少接口响应时间。
-- Kafka 削峰填谷，数据库按 Consumer 消费能力平稳写入。
+- RocketMQ 削峰填谷，数据库按 Consumer 消费能力平稳写入。
 - Redis 判断一人一单，Redisson 锁和数据库唯一索引作为后续兜底。
 - MySQL 乐观锁保留最终库存保护，防止 Redis 异常或消息重复导致超卖。
 
@@ -242,17 +242,17 @@ return 0
 5. Lua 返回 `2`，直接返回不能重复下单。
 6. Lua 返回 `0`，生成订单 ID。
 7. 构造订单消息 `VoucherOrderMessage`。
-8. 发送到 Kafka Topic `spotai.voucher-order.create`。
-9. Kafka 消息发送成功，返回订单 ID。
-10. Kafka 消息发送失败，需要回滚 Redis 库存和用户标记，或记录补偿日志。
+8. 发送到 RocketMQ Topic `spotai.voucher-order.create`。
+9. RocketMQ 消息发送成功，返回订单 ID。
+10. RocketMQ 消息发送失败，需要回滚 Redis 库存和用户标记，或记录补偿日志。
 
 请求线程不直接写订单表。
 
-## 7. Kafka 异步下单
+## 7. RocketMQ 异步下单
 
 ### 7.1 Topic 设计
 
-第一版直接使用 Kafka 承接异步下单任务。
+第一版直接使用 RocketMQ 承接异步下单任务。
 
 推荐 Topic：
 
@@ -260,11 +260,7 @@ return 0
 spotai.voucher-order.create
 ```
 
-推荐死信 Topic：
-
-```text
-spotai.voucher-order.create.dlt
-```
+RocketMQ 会为消费失败且超过最大重试次数的消息进入死信队列，通常表现为 `%DLQ%{consumerGroup}`。第一版先依赖 RocketMQ 默认重试和死信机制，不额外设计业务死信 Topic。
 
 消息对象建议字段：
 
@@ -288,11 +284,13 @@ spotai.voucher-order.create.dlt
 }
 ```
 
-推荐使用 `orderId` 作为 Kafka message key：
+第一版发送普通消息即可：
 
-- `orderId` 分布更均匀，能减少单分区热点。
-- 同一个订单的重复消息会进入同一分区，便于排查和保持单订单顺序。
-- 一人一单由 Redis Lua、Redisson 用户锁和数据库唯一约束兜底，不依赖 Kafka key 实现。
+- 消息体为 `VoucherOrderMessage`。
+- 发送方式使用 `RocketMQTemplate.syncSend(topic, message, timeoutMillis)`。
+- 一人一单由 Redis Lua、Redisson 用户锁和数据库唯一约束兜底，不依赖消息 key 实现。
+
+后续如果需要按用户或券维度控制有序消费，可以考虑 RocketMQ 顺序消息，并按 `userId` 或 `voucherId` 选择队列。
 
 可选 key 策略：
 
@@ -302,9 +300,9 @@ spotai.voucher-order.create.dlt
 | `userId` | 同一用户消息在同一分区内有序。 | 大用户或异常重试可能形成热点。 |
 | `voucherId` | 同一秒杀券消息在同一分区内有序。 | 热门券会形成严重分区热点。 |
 
-### 7.2 Kafka Consumer
+### 7.2 RocketMQ Consumer
 
-应用启动后创建 Kafka 消费者：
+应用启动后创建 RocketMQ 消费者：
 
 ```text
 VoucherOrderConsumer
@@ -315,15 +313,15 @@ VoucherOrderConsumer
 1. 订阅 `spotai.voucher-order.create`。
 2. 反序列化 `VoucherOrderMessage`。
 3. 调用 `handleVoucherOrder(message)` 执行异步落库。
-4. 数据库事务提交成功后再提交 Kafka offset。
-5. 处理失败时进入重试流程，多次失败后投递到 `spotai.voucher-order.create.dlt`。
+4. 方法正常返回表示消费成功。
+5. 处理失败时抛出异常，由 RocketMQ 触发消费重试；多次失败后进入该 Consumer Group 的死信队列。
 
-Kafka 的作用：
+RocketMQ 的作用：
 
 - 削峰填谷，把高并发抢单流量转为可控的异步消费流量。
 - 支持多实例 Consumer Group 横向扩容。
-- 提供消息持久化和 offset 机制，避免服务重启直接丢失未处理任务。
-- 配合重试 Topic 和死信 Topic，提高异常场景下的可恢复性。
+- 提供消息持久化、消费进度和重试机制，避免服务重启直接丢失未处理任务。
+- 配合重试和死信队列，提高异常场景下的可恢复性。
 
 ### 7.3 重试和死信
 
@@ -331,13 +329,13 @@ Kafka 的作用：
 
 | 失败类型 | 处理方式 |
 |---|---|
-| 临时失败，例如数据库短暂不可用 | Kafka 重试，或投递到延迟重试 Topic。 |
+| 临时失败，例如数据库短暂不可用 | 抛出异常，让 RocketMQ 触发消费重试。 |
 | 业务失败，例如数据库已存在订单 | 记录日志后确认消息，避免无限重试。 |
-| 多次重试仍失败 | 投递到 `spotai.voucher-order.create.dlt`，由补偿任务或人工处理。 |
+| 多次重试仍失败 | 进入 RocketMQ 死信队列，由补偿任务或人工处理。 |
 
 ### 7.4 异步下单事务
 
-Kafka Consumer 中执行数据库事务：
+RocketMQ Consumer 中执行数据库事务：
 
 1. 获取 Redisson 用户维度锁。
 2. 锁内查询数据库，确认用户未购买该券。
@@ -351,7 +349,7 @@ Kafka Consumer 中执行数据库事务：
 为什么异步线程还需要查重：
 
 - Redis 已经做了一人一单判断，但数据库必须有自己的最终校验。
-- 可能出现 Kafka 重复消费、Consumer 处理成功但提交 offset 前宕机、Redis 和 MySQL 状态不一致。
+- 可能出现 RocketMQ 重复消费、Consumer 处理成功但返回前宕机、Redis 和 MySQL 状态不一致。
 - 数据库查重和唯一索引是最终兜底。
 
 ## 8. Redisson 分布式锁
@@ -404,7 +402,7 @@ handleVoucherOrder(message)
 
 - Lua 只能保证 Redis 侧原子性。
 - 订单最终落在 MySQL。
-- Kafka 消息可能重复消费或失败重试，所以数据库落库阶段还需要 Redisson 锁和数据库兜底。
+- RocketMQ 消息可能重复消费或失败重试，所以数据库落库阶段还需要 Redisson 锁和数据库兜底。
 
 ## 9. MySQL 乐观锁作为最终库存保护
 
@@ -412,9 +410,9 @@ handleVoucherOrder(message)
 
 Redis 已经预扣库存，但 MySQL 仍然是最终事实来源。以下场景可能导致 Redis 和 MySQL 不一致：
 
-- 抢单成功后 Kafka 消息发送失败。
-- Kafka 消息消费失败。
-- Consumer 处理成功但提交 offset 前宕机，导致消息重复消费。
+- 抢单成功后 RocketMQ 消息发送失败。
+- RocketMQ 消息消费失败。
+- Consumer 处理成功但返回前宕机，导致消息重复消费。
 - 手动补偿或重试产生重复任务。
 - Redis 数据被误删或过期策略配置错误。
 
@@ -463,7 +461,7 @@ Redis 抢单成功后，以下情况需要回滚：
 
 | 场景 | 回滚动作 |
 |---|---|
-| Kafka 消息发送失败 | `incr seckill:stock:{voucherId}`，`srem seckill:order:{voucherId} userId` |
+| RocketMQ 消息发送失败 | `incr seckill:stock:{voucherId}`，`srem seckill:order:{voucherId} userId` |
 | 异步落库时发现用户已下单 | `incr` 库存，`srem` 用户标记 |
 | MySQL 乐观锁扣库存失败 | `incr` 库存，`srem` 用户标记 |
 | 数据库事务异常 | `incr` 库存，`srem` 用户标记 |
@@ -613,11 +611,7 @@ public Result<Long> seckillVoucher(Long voucherId) {
     );
 
     try {
-        kafkaTemplate.send(
-                "spotai.voucher-order.create",
-                orderId.toString(),
-                message
-        ).get();
+        rocketMQTemplate.syncSend("spotai.voucher-order.create", message, 3000);
     } catch (Exception e) {
         rollbackRedisSeckill(voucherId, userId);
         return Result.fail("系统繁忙，请稍后重试");
@@ -627,19 +621,17 @@ public Result<Long> seckillVoucher(Long voucherId) {
 }
 ```
 
-### 13.3 Kafka 消费者
+### 13.3 RocketMQ 消费者
 
 ```java
-@KafkaListener(
-        topics = "spotai.voucher-order.create",
-        groupId = "spotai-voucher-order"
+@RocketMQMessageListener(
+        topic = "spotai.voucher-order.create",
+        consumerGroup = "spotai-voucher-order-consumer"
 )
-public void onMessage(VoucherOrderMessage message) {
-    try {
+public class VoucherOrderConsumer implements RocketMQListener<VoucherOrderMessage> {
+    @Override
+    public void onMessage(VoucherOrderMessage message) {
         handleVoucherOrder(message);
-    } catch (Exception e) {
-        // 交给 Kafka 重试或死信策略处理。
-        throw e;
     }
 }
 ```
@@ -683,12 +675,12 @@ private void handleVoucherOrder(VoucherOrderMessage message) {
 
 ## 14. 后续演进方向
 
-第一版直接使用 Kafka，目标是完成 Redis 抢单和可靠异步下单闭环。
+第一版直接使用 RocketMQ，目标是完成 Redis 抢单和可靠异步下单闭环。
 
 后续生产化建议：
 
-1. 配置 Kafka 多分区和消费者组，提高异步下单吞吐。
-2. 引入 Kafka 重试 Topic 和死信 Topic。
+1. 配置 RocketMQ Topic 队列数和消费者组，提高异步下单吞吐。
+2. 配置 RocketMQ 消费重试和死信队列监控。
 3. 使用 `tb_voucher_reconcile_log_0/1` 做库存对账。
 4. 使用 `tb_rollback_failure_log` 记录回滚失败和补偿任务。
 5. 为 `tb_voucher_order_0/1` 增加唯一索引 `(user_id, voucher_id)`。
@@ -697,9 +689,9 @@ private void handleVoucherOrder(VoucherOrderMessage message) {
 推荐演进路径：
 
 ```text
-Redis Lua 抢单 + Kafka 异步下单
+Redis Lua 抢单 + RocketMQ 异步下单
 -> Redisson 锁 + MySQL 乐观锁兜底
--> Kafka 重试 Topic 和死信 Topic
+-> RocketMQ 重试和死信队列
 -> 对账和补偿
 ```
 
@@ -712,7 +704,7 @@ Redis Lua 抢单 + Kafka 异步下单
 | 普通券添加 | 只写 `tb_voucher_0/1`，`type=0`。 |
 | 秒杀券添加 | 写 `tb_voucher_0/1`、`tb_seckill_voucher_0/1`，并预热 `seckill:stock:{voucherId}`。 |
 | 抢单入口 | Redis Lua 原子判断库存和一人一单。 |
-| 异步下单 | 抢单成功后发送 Kafka 消息，由 Kafka Consumer 消费。 |
+| 异步下单 | 抢单成功后发送 RocketMQ 消息，由 RocketMQ Consumer 消费。 |
 | 订单 ID | 使用 `RedisIdWorker.nextId("voucher_order")`。 |
 | 一人一单 | Redis Set 做入口判断，Redisson 用户券维度锁做异步落库保护。 |
 | 库存超卖 | Redis 预扣库存，MySQL 乐观锁作为最终兜底。 |

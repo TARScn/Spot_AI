@@ -1,21 +1,23 @@
 package com.tars.spotai.service;
 
 import com.tars.spotai.dto.VoucherOrderMessage;
-import org.springframework.kafka.annotation.KafkaListener;
+import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
+import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.springframework.stereotype.Component;
 
 @Component
-public class VoucherOrderConsumer {
+@RocketMQMessageListener(
+        topic = "${spotai.voucher.order-topic}",
+        consumerGroup = "${spotai.voucher.order-consumer-group}"
+)
+public class VoucherOrderConsumer implements RocketMQListener<VoucherOrderMessage> {
     private final VoucherService voucherService;
 
     public VoucherOrderConsumer(VoucherService voucherService) {
         this.voucherService = voucherService;
     }
 
-    @KafkaListener(
-            topics = "${spotai.voucher.order-topic}",
-            groupId = "${spring.kafka.consumer.group-id}"
-    )
+    @Override
     public void onMessage(VoucherOrderMessage message) {
         voucherService.handleVoucherOrder(message);
     }

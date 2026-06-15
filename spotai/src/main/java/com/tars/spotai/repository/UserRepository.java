@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Repository for persisting and querying user data across sharded database tables.
@@ -53,6 +54,24 @@ public class UserRepository {
         } catch (EmptyResultDataAccessException e) {
             return null;
         }
+    }
+
+    public User findById(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        for (String userTable : List.of("tb_user_0", "tb_user_1")) {
+            try {
+                return jdbcTemplate.queryForObject(
+                        "select id, phone, password, nick_name, icon, create_time, update_time from " + userTable + " where id = ?",
+                        new UserRowMapper(),
+                        userId
+                );
+            } catch (EmptyResultDataAccessException ignored) {
+                // Continue scanning the next user shard.
+            }
+        }
+        return null;
     }
 
     /* 3. 事务性保存用户及其手机号索引 */

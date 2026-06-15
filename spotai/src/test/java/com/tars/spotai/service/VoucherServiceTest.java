@@ -16,24 +16,25 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -50,7 +51,7 @@ class VoucherServiceTest {
     @Mock
     private StringRedisTemplate stringRedisTemplate;
     @Mock
-    private KafkaTemplate<String, VoucherOrderMessage> kafkaTemplate;
+    private RocketMQTemplate rocketMQTemplate;
     @Mock
     private RedissonClient redissonClient;
     @Mock
@@ -71,7 +72,7 @@ class VoucherServiceTest {
                 shopRepository,
                 redisIdWorker,
                 stringRedisTemplate,
-                kafkaTemplate,
+                rocketMQTemplate,
                 voucherProperties,
                 redissonClient,
                 transactionTemplate
@@ -84,24 +85,22 @@ class VoucherServiceTest {
     }
 
     @Test
-    void seckillVoucherSendsKafkaMessageWhenRedisClaimSucceeds() {
+    void seckillVoucherSendsRocketMqMessageWhenRedisClaimSucceeds() {
         UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
         when(voucherRepository.findVoucherById(2001L)).thenReturn(seckillVoucherBase());
         when(voucherRepository.findSeckillVoucherByVoucherId(2001L)).thenReturn(activeSeckillVoucher());
         when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001"))).thenReturn(0L);
         when(redisIdWorker.nextId("voucher_order")).thenReturn(9001L);
-        when(kafkaTemplate.send(eq("spotai.voucher-order.create"), eq("9001"), any(VoucherOrderMessage.class)))
-                .thenReturn(CompletableFuture.completedFuture(null));
 
         Result<Long> result = voucherService.seckillVoucher(2001L);
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getData()).isEqualTo(9001L);
-        verify(kafkaTemplate).send(eq("spotai.voucher-order.create"), eq("9001"), any(VoucherOrderMessage.class));
+        verify(rocketMQTemplate).syncSend(eq("spotai.voucher-order.create"), any(VoucherOrderMessage.class), anyLong());
     }
 
     @Test
-    void seckillVoucherRollsBackRedisWhenKafkaSendFails() {
+    void seckillVoucherRollsBackRedisWhenRocketMqSendFails() {
         UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
         when(voucherRepository.findVoucherById(2001L)).thenReturn(seckillVoucherBase());
         when(voucherRepository.findSeckillVoucherByVoucherId(2001L)).thenReturn(activeSeckillVoucher());
@@ -109,10 +108,9 @@ class VoucherServiceTest {
                 .thenReturn(0L)
                 .thenReturn(0L);
         when(redisIdWorker.nextId("voucher_order")).thenReturn(9001L);
-        CompletableFuture<Object> failedFuture = new CompletableFuture<>();
-        failedFuture.completeExceptionally(new IllegalStateException("kafka down"));
-        when(kafkaTemplate.send(eq("spotai.voucher-order.create"), eq("9001"), any(VoucherOrderMessage.class)))
-                .thenReturn((CompletableFuture) failedFuture);
+        doThrow(new IllegalStateException("rocketmq down"))
+                .when(rocketMQTemplate)
+                .syncSend(eq("spotai.voucher-order.create"), any(VoucherOrderMessage.class), anyLong());
 
         Result<Long> result = voucherService.seckillVoucher(2001L);
 

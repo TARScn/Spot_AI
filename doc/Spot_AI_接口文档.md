@@ -123,8 +123,15 @@ GET, POST, PUT, DELETE, OPTIONS
 | 用户 | `POST` | `/user/code` | 否 | 发送短信验证码，当前通过日志模拟短信。 |
 | 用户 | `POST` | `/user/login` | 否 | 手机号验证码登录；用户不存在时自动注册。 |
 | 用户 | `GET` | `/user/me` | 是 | 获取当前登录用户信息。 |
+| 用户 | `POST` | `/user/sign` | 是 | 当前登录用户每日签到，使用 Redis BitMap 记录。 |
+| 用户 | `GET` | `/user/sign/count` | 是 | 查询当前登录用户当月连续签到天数。 |
 | 商户 | `GET` | `/shop/{id}` | 否 | 根据 ID 查询商户详情，使用 Redis 缓存。 |
 | 商户 | `PUT` | `/shop` | 否 | 更新商户信息，更新数据库后删除 Redis 缓存。 |
+| 商户 | `GET` | `/shop/of/type` | 否 | 按商户类型分页查询；传入经纬度时使用 Redis GEO 查询附近商户。 |
+| 商户 | `PUT` | `/shop/geo/load` | 否 | 将商户经纬度预热到 Redis GEO。 |
+| 统计 | `POST` | `/stats/uv` | 否 | 记录全站、商户、笔记或页面 UV。 |
+| 统计 | `GET` | `/stats/uv/site` | 否 | 查询全站日 UV。 |
+| 统计 | `GET` | `/stats/uv/shop/{shopId}` | 否 | 查询指定商户日 UV。 |
 
 ### 3.2 参考接口状态
 
@@ -133,11 +140,11 @@ GET, POST, PUT, DELETE, OPTIONS
 | 用户扩展 | 参考接口已列出，部分已实现。 |
 | 商户 | 参考接口已列出，当前未实现。 |
 | 商户分类 | 参考接口已列出，当前未实现。 |
-| 探店博客 | 参考接口已列出，当前未实现。 |
+| 探店博客 | 已实现发布、详情、热门列表、用户列表、点赞和点赞排行榜。 |
 | 关注 | 参考接口已列出，当前未实现。 |
 | 优惠券 | 参考接口已列出，当前未实现。 |
 | 秒杀订单 | 参考接口已列出，当前未实现。 |
-| 文件上传 | 参考接口已列出，当前未实现。 |
+| 文件上传 | 已基于 MinIO 实现通用上传、探店图片上传和文件删除。 |
 | 博客评论 | 参考项目 Controller 暂无具体方法。 |
 
 ## 4. 已实现接口详情
@@ -442,7 +449,232 @@ Content-Type: application/json
 
 1. 先更新 MySQL `tb_shop`。
 2. 更新成功后删除 Redis：`cache:shop:{id}`。
-3. 下一次查询 `/shop/{id}` 时回源数据库，并重新写入逻辑过期缓存。
+3. 重新加载 Redis GEO 中的商户经纬度，保证附近商户查询使用最新坐标。
+4. 下一次查询 `/shop/{id}` 时回源数据库，并重新写入逻辑过期缓存。
+
+### 4.6 按类型查询商户和附近商户
+
+```http
+GET /shop/of/type
+```
+
+是否需要登录：否
+
+请求参数类型：Query
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `typeId` | number | 是 | 商户类型 ID。 |
+| `current` | number | 否 | 页码，默认 `1`。 |
+| `x` | number | 否 | 用户当前位置经度。 |
+| `y` | number | 否 | 用户当前位置纬度。 |
+
+请求示例：
+
+```http
+GET /shop/of/type?typeId=1&current=1&x=120.149192&y=30.316078
+```
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "103茶餐厅",
+      "typeId": 1,
+      "x": 120.149192,
+      "y": 30.316078,
+      "distance": 128.6
+    }
+  ],
+  "errorMsg": null
+}
+```
+
+后端行为：
+
+1. 未传 `x/y` 时，按 `typeId` 从 MySQL 分页查询商户。
+2. 传入 `x/y` 时，查询 Redis GEO：`shop:geo:{typeId}`。
+3. Redis 按距离升序返回商户 ID 和距离。
+4. 后端根据商户 ID 回查 MySQL 详情，并按 Redis 返回顺序重新排序。
+5. 返回结果中补充 `distance` 字段，单位为米。
+
+### 4.7 加载商户 GEO 坐标
+
+```http
+PUT /shop/geo/load
+```
+
+是否需要登录：否
+
+说明：该接口用于开发、初始化或管理后台手动预热附近商户数据。
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": null,
+  "errorMsg": null
+}
+```
+
+Redis 写入规则：
+
+| Key | Member | 坐标 | 说明 |
+|---|---|---|---|
+| `shop:geo:{typeId}` | `shopId` | `x`, `y` | 按商户类型拆分 GEO，方便按分类查询附近商户。 |
+
+### 4.8 用户签到
+
+```http
+POST /user/sign
+```
+
+是否需要登录：是
+
+请求头：
+
+```http
+Authorization: Bearer {token}
+```
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": null,
+  "errorMsg": null
+}
+```
+
+常见失败：
+
+| 场景 | 响应 |
+|---|---|
+| 今日已签到 | `{"success":false,"data":null,"errorMsg":"今日已签到"}` |
+| 未登录 | HTTP `401`，`{"success":false,"data":null,"errorMsg":"请先登录"}` |
+
+Redis 写入规则：
+
+```text
+SETBIT sign:{userId}:{yyyyMM} {dayOfMonth - 1} 1
+```
+
+示例：
+
+```text
+sign:1001:202606
+```
+
+### 4.9 查询连续签到天数
+
+```http
+GET /user/sign/count
+```
+
+是否需要登录：是
+
+请求头：
+
+```http
+Authorization: Bearer {token}
+```
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": 3,
+  "errorMsg": null
+}
+```
+
+后端行为：
+
+1. 从 `UserHolder` 获取当前用户。
+2. 读取当前月份签到 BitMap：`sign:{userId}:{yyyyMM}`。
+3. 使用 `BITFIELD GET u{dayOfMonth} 0` 读取本月 1 号到今天的签到状态。
+4. 从低位开始统计连续的 `1`，得到连续签到天数。
+
+### 4.10 记录 UV
+
+```http
+POST /stats/uv
+```
+
+是否需要登录：否
+
+请求参数类型：JSON Body
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `targetType` | string | 是 | 统计目标类型，可选值：`site`、`shop`、`blog`、`page`。 |
+| `targetId` | number | 否 | 商户或笔记 ID，`shop`、`blog` 类型必填。 |
+| `pageCode` | string | 否 | 页面编码，`page` 类型必填。 |
+| `visitor` | string | 否 | 匿名访客 ID；未传时优先使用当前登录用户 ID。 |
+
+请求示例：
+
+```json
+{
+  "targetType": "shop",
+  "targetId": 1,
+  "visitor": "visitor:2f1d0a8e4c9b"
+}
+```
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": null,
+  "errorMsg": null
+}
+```
+
+Redis 写入规则：
+
+| 维度 | Key |
+|---|---|
+| 全站日 UV | `uv:site:{yyyyMMdd}` |
+| 商户日 UV | `uv:shop:{shopId}:{yyyyMMdd}` |
+| 笔记日 UV | `uv:blog:{blogId}:{yyyyMMdd}` |
+| 页面日 UV | `uv:page:{pageCode}:{yyyyMMdd}` |
+
+### 4.11 查询 UV
+
+```http
+GET /stats/uv/site?date=2026-06-11
+GET /stats/uv/shop/{shopId}?date=2026-06-11
+```
+
+是否需要登录：否
+
+请求参数类型：Path + Query
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `shopId` | number | 商户 UV 必填 | 商户 ID。 |
+| `date` | string | 否 | 统计日期，格式 `yyyy-MM-dd`；不传时默认当天。 |
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": 1024,
+  "errorMsg": null
+}
+```
+
+说明：UV 使用 Redis HyperLogLog 统计，适合做低内存的独立访客估算，不适合需要强精确的计费或审计场景。
 
 ## 5. 参考接口详情
 
@@ -460,8 +692,8 @@ Content-Type: application/json
 | `GET` | `/user/me` | 是 | 无 | 获取当前登录用户。 | 已实现 |
 | `GET` | `/user/info/{id}` | 否/可选 | Path: `id` | 查询用户详细资料。 | 未实现 |
 | `GET` | `/user/{id}` | 否/可选 | Path: `id` | 根据用户 ID 查询用户公开信息。 | 未实现 |
-| `POST` | `/user/sign` | 是 | 无 | 用户每日签到。 | 未实现 |
-| `GET` | `/user/sign/count` | 是 | 无 | 查询当前用户连续签到天数。 | 未实现 |
+| `POST` | `/user/sign` | 是 | 无 | 用户每日签到。 | 已实现 |
+| `GET` | `/user/sign/count` | 是 | 无 | 查询当前用户连续签到天数。 | 已实现 |
 
 ### 5.2 商户模块
 
@@ -472,7 +704,7 @@ Content-Type: application/json
 | `GET` | `/shop/{id}` | 否 | Path: `id` | 根据 ID 查询商户详情。 | 已实现 |
 | `POST` | `/shop` | 建议管理员 | Body: 商户对象 | 新增商户。 | 未实现 |
 | `PUT` | `/shop` | 建议管理员 | Body: 商户对象 | 更新商户信息。 | 已实现 |
-| `GET` | `/shop/of/type` | 否 | Query: `typeId`, `current`, `x`, `y` | 根据商户类型分页查询；可传经纬度做附近商户查询。 | 未实现 |
+| `GET` | `/shop/of/type` | 否 | Query: `typeId`, `current`, `x`, `y` | 根据商户类型分页查询；可传经纬度做附近商户查询。 | 已实现 |
 | `GET` | `/shop/of/name` | 否 | Query: `name`, `current` | 根据商户名称关键字分页查询。 | 未实现 |
 
 ### 5.3 商户分类模块
@@ -489,14 +721,14 @@ Content-Type: application/json
 
 | 方法 | 路径 | 是否需要登录 | 参数 | 说明 | Spot AI 状态 |
 |---|---|---|---|---|---|
-| `POST` | `/blog` | 是 | Body: 博客对象 | 发布探店笔记。 | 未实现 |
-| `PUT` | `/blog/like/{id}` | 是 | Path: `id` | 点赞或取消点赞探店笔记。 | 未实现 |
-| `GET` | `/blog/of/me` | 是 | Query: `current` | 查询当前登录用户的探店笔记。 | 未实现 |
-| `GET` | `/blog/hot` | 否 | Query: `current` | 查询热门探店笔记。 | 未实现 |
-| `GET` | `/blog/{id}` | 否 | Path: `id` | 根据 ID 查询探店笔记详情。 | 未实现 |
-| `GET` | `/blog/likes/{id}` | 否 | Path: `id` | 查询某篇笔记点赞用户列表。 | 未实现 |
-| `GET` | `/blog/of/user` | 否 | Query: `id`, `current` | 查询指定用户的探店笔记。 | 未实现 |
-| `GET` | `/blog/of/follow` | 是 | Query: `lastId`, `offset` | 查询关注流，使用滚动分页。 | 未实现 |
+| `POST` | `/blog` | 是 | Body: 博客对象 | 发布探店笔记。 | 已实现 |
+| `PUT` | `/blog/like/{id}` | 是 | Path: `id` | 点赞或取消点赞探店笔记。 | 已实现 |
+| `GET` | `/blog/of/me` | 是 | Query: `current` | 查询当前登录用户的探店笔记。 | 已实现 |
+| `GET` | `/blog/hot` | 否 | Query: `current` | 查询热门探店笔记。 | 已实现 |
+| `GET` | `/blog/{id}` | 否 | Path: `id` | 根据 ID 查询探店笔记详情。 | 已实现 |
+| `GET` | `/blog/likes/{id}` | 否 | Path: `id` | 查询某篇笔记点赞用户列表。 | 已实现 |
+| `GET` | `/blog/of/user` | 否 | Query: `id`, `current` | 查询指定用户的探店笔记。 | 已实现 |
+| `GET` | `/blog/of/follow` | 是 | Query: `lastId`, `offset` | 查询关注流，使用滚动分页。 | 已实现 |
 
 ### 5.5 关注模块
 
@@ -504,9 +736,19 @@ Content-Type: application/json
 
 | 方法 | 路径 | 是否需要登录 | 参数 | 说明 | Spot AI 状态 |
 |---|---|---|---|---|---|
-| `PUT` | `/follow/{id}/{isFollow}` | 是 | Path: `id`, `isFollow` | 关注或取消关注指定用户。 | 未实现 |
-| `GET` | `/follow/or/not/{id}` | 是 | Path: `id` | 判断当前用户是否已关注指定用户。 | 未实现 |
-| `GET` | `/follow/common/{id}` | 是 | Path: `id` | 查询当前用户与指定用户的共同关注。 | 未实现 |
+| `PUT` | `/follow/{id}/{isFollow}` | 是 | Path: `id`, `isFollow` | 关注或取消关注指定用户。 | 已实现 |
+| `GET` | `/follow/or/not/{id}` | 是 | Path: `id` | 判断当前用户是否已关注指定用户。 | 已实现 |
+| `GET` | `/follow/common/{id}` | 是 | Path: `id` | 查询当前用户与指定用户的共同关注。 | 已实现 |
+
+关注流响应中的 `data` 为滚动分页对象：
+
+```json
+{
+  "list": [],
+  "minTime": 1781172000000,
+  "offset": 1
+}
+```
 
 ### 5.6 优惠券模块
 
@@ -555,13 +797,29 @@ redisIdWorker.nextId("voucher_order")
 
 | 方法 | 路径 | 是否需要登录 | 参数 | 说明 | Spot AI 状态 |
 |---|---|---|---|---|---|
-| `POST` | `/upload/blog` | 是 | FormData: `file` | 上传探店笔记图片。 | 未实现 |
-| `GET` | `/upload/blog/delete` | 是 | Query: `name` | 删除探店笔记图片。 | 未实现 |
+| `POST` | `/upload/file` | 是 | FormData: `file`；Query: `directory`，默认 `common` | 上传通用文件到 MinIO。 | 已实现 |
+| `POST` | `/upload/blog` | 是 | FormData: `file` | 上传探店笔记图片，默认目录为 `spotai.minio.blog-prefix`。 | 已实现 |
+| `DELETE` | `/upload/file` | 是 | Query: `name` | 删除 MinIO 中的对象，`name` 可传对象名或完整访问 URL。 | 已实现 |
 
 上传请求类型：
 
 ```http
 Content-Type: multipart/form-data
+```
+
+上传成功响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "name": "blog/2026/06/11/8f4b5f4b-43e6-4d8b-9a40-2dc42bb6c7c7.jpg",
+    "url": "http://localhost:9000/spotai/blog/2026/06/11/8f4b5f4b-43e6-4d8b-9a40-2dc42bb6c7c7.jpg",
+    "contentType": "image/jpeg",
+    "size": 204800
+  },
+  "errorMsg": null
+}
 ```
 
 ### 5.9 博客评论模块
@@ -575,11 +833,11 @@ Content-Type: multipart/form-data
 | 能力 | 说明 |
 |---|---|
 | 退出登录 | 暂未提供 `/user/logout`，前端目前只删除本地 token。 |
-| 商户列表和附近查询 | 已实现商户详情查询和商户更新；新增、列表、分类分页和附近查询未实现。 |
+| 商户列表和附近查询 | 已实现商户详情、商户更新、按类型分页和附近商户 GEO 查询；新增商户和名称搜索未实现。 |
 | 商户分类 | 数据表已存在，接口未实现。 |
-| 探店博客 | 数据表已存在，接口未实现。 |
-| 关注关系 | 数据表已存在，接口未实现。 |
+| 探店博客 | 核心接口已实现；评论、关注流高粉推拉结合等高级能力后续扩展。 |
+| 关注关系 | 已实现关注、取消关注、是否关注、共同关注。 |
 | 优惠券秒杀 | 数据表和 Redis ID 工具已准备，接口未实现。 |
 | 订单查询 | 数据表已存在，接口未实现。 |
-| 文件上传 | 技术文档规划使用 MinIO，接口未实现。 |
+| 文件上传 | 已实现基础 MinIO 存储，后续可继续补充图片压缩、类型白名单和鉴权细分。 |
 | AI 对话 | 技术文档有规划，接口未实现。 |
