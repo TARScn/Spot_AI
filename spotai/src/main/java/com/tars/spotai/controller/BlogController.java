@@ -51,6 +51,12 @@ public class BlogController {
         return blogService.queryBlogByUser(userId, current);
     }
 
+    @GetMapping("/blog/of/shop")
+    public Result<List<BlogViewDTO>> queryBlogByShop(@RequestParam("id") Long shopId,
+                                                     @RequestParam(defaultValue = "1") Integer current) {
+        return blogService.queryBlogByShop(shopId, current);
+    }
+
     @GetMapping("/blog/of/follow")
     public Result<ScrollResultDTO<BlogViewDTO>> queryBlogOfFollow(@RequestParam Long lastId,
                                                                   @RequestParam(defaultValue = "0") Integer offset) {

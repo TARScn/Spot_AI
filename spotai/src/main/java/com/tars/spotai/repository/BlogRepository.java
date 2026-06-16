@@ -90,6 +90,23 @@ public class BlogRepository {
         );
     }
 
+    public List<Blog> findByShopId(Long shopId, int current) {
+        int offset = offset(current);
+        return jdbcTemplate.query(
+                """
+                        select id, shop_id, user_id, title, images, content, liked, comments, create_time, update_time
+                        from tb_blog
+                        where shop_id = ?
+                        order by create_time desc
+                        limit ?, ?
+                        """,
+                new BlogRowMapper(),
+                shopId,
+                offset,
+                PAGE_SIZE
+        );
+    }
+
     public int increaseLiked(Long id) {
         return jdbcTemplate.update("update tb_blog set liked = liked + 1 where id = ?", id);
     }

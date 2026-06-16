@@ -5,6 +5,7 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.SetBucketPolicyArgs;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -22,6 +23,7 @@ public class MinioConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "spotai.minio", name = "initialize-bucket", havingValue = "true", matchIfMissing = true)
     public ApplicationRunner minioBucketInitializer(MinioClient minioClient, MinioProperties properties) {
         return args -> {
             boolean exists = minioClient.bucketExists(BucketExistsArgs.builder()

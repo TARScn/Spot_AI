@@ -129,6 +129,7 @@ GET, POST, PUT, DELETE, OPTIONS
 | 商户 | `PUT` | `/shop` | 否 | 更新商户信息，更新数据库后删除 Redis 缓存。 |
 | 商户 | `GET` | `/shop/of/type` | 否 | 按商户类型分页查询；传入经纬度时使用 Redis GEO 查询附近商户。 |
 | 商户 | `PUT` | `/shop/geo/load` | 否 | 将商户经纬度预热到 Redis GEO。 |
+| 商户分类 | `GET` | `/shop-type/list` | 否 | 查询商户分类列表，按 `sort` 升序返回。 |
 | 统计 | `POST` | `/stats/uv` | 否 | 记录全站、商户、笔记或页面 UV。 |
 | 统计 | `GET` | `/stats/uv/site` | 否 | 查询全站日 UV。 |
 | 统计 | `GET` | `/stats/uv/shop/{shopId}` | 否 | 查询指定商户日 UV。 |
@@ -139,7 +140,7 @@ GET, POST, PUT, DELETE, OPTIONS
 |---|---|
 | 用户扩展 | 参考接口已列出，部分已实现。 |
 | 商户 | 参考接口已列出，当前未实现。 |
-| 商户分类 | 参考接口已列出，当前未实现。 |
+| 商户分类 | 已实现分类列表查询。 |
 | 探店博客 | 已实现发布、详情、热门列表、用户列表、点赞和点赞排行榜。 |
 | 关注 | 参考接口已列出，当前未实现。 |
 | 优惠券 | 参考接口已列出，当前未实现。 |
@@ -528,7 +529,40 @@ Redis 写入规则：
 |---|---|---|---|
 | `shop:geo:{typeId}` | `shopId` | `x`, `y` | 按商户类型拆分 GEO，方便按分类查询附近商户。 |
 
-### 4.8 用户签到
+### 4.8 查询商户分类
+
+```http
+GET /shop-type/list
+```
+
+是否需要登录：否
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "美食",
+      "icon": "/types/ms.png",
+      "sort": 1,
+      "createTime": "2021-12-22T12:17:47",
+      "updateTime": "2021-12-23T03:24:31"
+    }
+  ],
+  "errorMsg": null
+}
+```
+
+后端行为：
+
+1. 查询 `tb_shop_type`。
+2. 按 `sort asc, id asc` 排序。
+3. 返回真实商户分类，供前端分类导航和 `/shop/of/type` 的 `typeId` 参数使用。
+
+### 4.9 用户签到
 
 ```http
 POST /user/sign
@@ -571,7 +605,7 @@ SETBIT sign:{userId}:{yyyyMM} {dayOfMonth - 1} 1
 sign:1001:202606
 ```
 
-### 4.9 查询连续签到天数
+### 4.10 查询连续签到天数
 
 ```http
 GET /user/sign/count
@@ -602,7 +636,7 @@ Authorization: Bearer {token}
 3. 使用 `BITFIELD GET u{dayOfMonth} 0` 读取本月 1 号到今天的签到状态。
 4. 从低位开始统计连续的 `1`，得到连续签到天数。
 
-### 4.10 记录 UV
+### 4.11 记录 UV
 
 ```http
 POST /stats/uv
@@ -648,7 +682,7 @@ Redis 写入规则：
 | 笔记日 UV | `uv:blog:{blogId}:{yyyyMMdd}` |
 | 页面日 UV | `uv:page:{pageCode}:{yyyyMMdd}` |
 
-### 4.11 查询 UV
+### 4.12 查询 UV
 
 ```http
 GET /stats/uv/site?date=2026-06-11
@@ -713,7 +747,7 @@ GET /stats/uv/shop/{shopId}?date=2026-06-11
 
 | 方法 | 路径 | 是否需要登录 | 参数 | 说明 | Spot AI 状态 |
 |---|---|---|---|---|---|
-| `GET` | `/shop-type/list` | 否 | 无 | 查询商户分类列表，通常按 `sort` 排序。 | 未实现 |
+| `GET` | `/shop-type/list` | 否 | 无 | 查询商户分类列表，通常按 `sort` 排序。 | 已实现 |
 
 ### 5.4 探店博客模块
 
@@ -834,7 +868,7 @@ Content-Type: multipart/form-data
 |---|---|
 | 退出登录 | 暂未提供 `/user/logout`，前端目前只删除本地 token。 |
 | 商户列表和附近查询 | 已实现商户详情、商户更新、按类型分页和附近商户 GEO 查询；新增商户和名称搜索未实现。 |
-| 商户分类 | 数据表已存在，接口未实现。 |
+| 商户分类 | 已实现 `/shop-type/list`，前端分类入口可直接使用真实分类。 |
 | 探店博客 | 核心接口已实现；评论、关注流高粉推拉结合等高级能力后续扩展。 |
 | 关注关系 | 已实现关注、取消关注、是否关注、共同关注。 |
 | 优惠券秒杀 | 数据表和 Redis ID 工具已准备，接口未实现。 |

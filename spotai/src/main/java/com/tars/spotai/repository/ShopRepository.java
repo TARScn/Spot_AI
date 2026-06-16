@@ -67,7 +67,7 @@ public class ShopRepository {
                                create_time, update_time
                         from tb_shop
                         where type_id = ?
-                        order by id
+                        order by update_time desc, id desc
                         limit ?, ?
                         """,
                 new ShopRowMapper(),

@@ -131,6 +131,16 @@ public class BlogService {
         return Result.ok(toViewDTOList(blogRepository.findByUserId(userId, normalizeCurrent(current))));
     }
 
+    public Result<List<BlogViewDTO>> queryBlogByShop(Long shopId, Integer current) {
+        if (shopId == null || shopId <= 0) {
+            return Result.fail("商户ID不合法");
+        }
+        if (shopRepository.findById(shopId) == null) {
+            return Result.fail("商户不存在");
+        }
+        return Result.ok(toViewDTOList(blogRepository.findByShopId(shopId, normalizeCurrent(current))));
+    }
+
     public Result<ScrollResultDTO<BlogViewDTO>> queryBlogOfFollow(Long lastId, Integer offset) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {

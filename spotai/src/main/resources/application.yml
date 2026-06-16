@@ -10,27 +10,28 @@ spring:
       max-request-size: 30MB
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/spotai_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
-    password: 000000
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/spotai_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:000000}
   data:
     redis:
-      host: localhost
-      port: 6379
-      database: 0
-      password: 540788
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      password: ${REDIS_PASSWORD:540788}
       timeout: 3s
 
 rocketmq:
-  name-server: localhost:9876
+  name-server: ${ROCKETMQ_NAME_SERVER:localhost:9876}
   producer:
-    group: spotai-voucher-order-producer
+    group: ${ROCKETMQ_PRODUCER_GROUP:spotai-voucher-order-producer}
 
 spotai:
   auth:
     code-ttl-minutes: 5
     token-ttl-minutes: 30
   voucher:
+    mq-enabled: ${SPOTAI_VOUCHER_MQ_ENABLED:true}
     order-topic: spotai.voucher-order.create
     order-consumer-group: spotai-voucher-order-consumer
   minio:
