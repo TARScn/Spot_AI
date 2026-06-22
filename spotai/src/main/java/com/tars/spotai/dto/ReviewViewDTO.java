@@ -5,24 +5,21 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
-public class BlogViewDTO {
+public class ReviewViewDTO {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     @JsonSerialize(using = ToStringSerializer.class)
     private Long shopId;
     @JsonSerialize(using = ToStringSerializer.class)
     private Long userId;
-    private String title;
-    private String images;
+    private String userName;
+    private String userIcon;
+    private Integer score;
     private String content;
     private Integer liked;
-    private Integer comments;
-    private Boolean isLike;
-    private Boolean isFollow;
-    private String name;
-    private String icon;
+    private List<String> images;
     private LocalDateTime createTime;
-    private LocalDateTime updateTime;
 }

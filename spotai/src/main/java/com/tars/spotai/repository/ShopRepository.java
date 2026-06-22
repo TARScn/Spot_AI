@@ -10,6 +10,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -75,6 +76,76 @@ public class ShopRepository {
                 offset,
                 pageSize
         );
+    }
+
+    public List<Shop> search(String keyword, int limit) {
+        List<String> terms = buildSearchTerms(keyword);
+        if (terms.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String conditions = terms.stream()
+                .map(word -> "(name like ? or area like ? or address like ?)")
+                .collect(Collectors.joining(" or "));
+        List<Object> args = new ArrayList<>();
+        for (String term : terms) {
+            String pattern = "%" + term + "%";
+            args.add(pattern);
+            args.add(pattern);
+            args.add(pattern);
+        }
+        String rawPattern = "%" + keyword.trim() + "%";
+        String firstTermPattern = "%" + terms.get(0) + "%";
+        args.add(rawPattern);
+        args.add(firstTermPattern);
+        args.add(firstTermPattern);
+        args.add(firstTermPattern);
+        args.add(Math.max(1, Math.min(limit, 20)));
+        return jdbcTemplate.query(
+                """
+                select id, name, type_id, images, area, address, x, y,
+                       avg_price, sold, comments, score, open_hours,
+                       create_time, update_time
+                from tb_shop
+                where 
+                """ + conditions + """
+
+                order by
+                    case
+                        when name like ? then 0
+                        when name like ? then 1
+                        when area like ? or address like ? then 2
+                        else 3
+                    end,
+                    score desc, comments desc, id desc
+                limit ?
+                """,
+                new ShopRowMapper(),
+                args.toArray()
+        );
+    }
+
+    private List<String> buildSearchTerms(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<String> terms = new ArrayList<>();
+        for (String segment : keyword.trim().split("[\\s,，.。;；:：!！?？()（）\\[\\]【】<>《》/\\\\|、\"'“”‘’-]+")) {
+            String value = segment.trim();
+            if (value.isEmpty()) {
+                continue;
+            }
+            terms.add(value);
+            if (value.length() >= 5) {
+                int window = Math.min(5, value.length());
+                for (int index = 0; index <= value.length() - window && terms.size() < 12; index++) {
+                    terms.add(value.substring(index, index + window));
+                }
+            }
+        }
+        return terms.stream()
+                .distinct()
+                .limit(12)
+                .toList();
     }
 
     public List<Shop> findByIds(List<Long> ids) {

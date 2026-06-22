@@ -8,6 +8,7 @@ import com.tars.spotai.dto.UserDTO;
 import com.tars.spotai.entity.Blog;
 import com.tars.spotai.entity.User;
 import com.tars.spotai.repository.BlogRepository;
+import com.tars.spotai.repository.FollowRepository;
 import com.tars.spotai.repository.ShopRepository;
 import com.tars.spotai.repository.UserRepository;
 import com.tars.spotai.utils.RedisConstants;
@@ -20,7 +21,6 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -31,9 +31,11 @@ public class BlogService {
             """
                     if redis.call('zscore', KEYS[1], ARGV[1]) then
                       redis.call('zrem', KEYS[1], ARGV[1])
+                      redis.call('zrem', KEYS[2], ARGV[3])
                       return -1
                     end
                     redis.call('zadd', KEYS[1], ARGV[2], ARGV[1])
+                    redis.call('zadd', KEYS[2], ARGV[2], ARGV[3])
                     return 1
                     """,
             Long.class
@@ -42,9 +44,11 @@ public class BlogService {
             """
                     if ARGV[2] == '1' then
                       redis.call('zrem', KEYS[1], ARGV[1])
+                      redis.call('zrem', KEYS[2], ARGV[4])
                       return 1
                     end
                     redis.call('zadd', KEYS[1], ARGV[3], ARGV[1])
+                    redis.call('zadd', KEYS[2], ARGV[3], ARGV[4])
                     return 1
                     """,
             Long.class
@@ -53,6 +57,7 @@ public class BlogService {
     private final BlogRepository blogRepository;
     private final UserRepository userRepository;
     private final ShopRepository shopRepository;
+    private final FollowRepository followRepository;
     private final RedisIdWorker redisIdWorker;
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedService feedService;
@@ -60,12 +65,14 @@ public class BlogService {
     public BlogService(BlogRepository blogRepository,
                        UserRepository userRepository,
                        ShopRepository shopRepository,
+                       FollowRepository followRepository,
                        RedisIdWorker redisIdWorker,
                        StringRedisTemplate stringRedisTemplate,
                        FeedService feedService) {
         this.blogRepository = blogRepository;
         this.userRepository = userRepository;
         this.shopRepository = shopRepository;
+        this.followRepository = followRepository;
         this.redisIdWorker = redisIdWorker;
         this.stringRedisTemplate = stringRedisTemplate;
         this.feedService = feedService;
@@ -124,6 +131,14 @@ public class BlogService {
         return Result.ok(toViewDTOList(blogRepository.findByUserId(currentUser.getId(), normalizeCurrent(current))));
     }
 
+    public Result<List<BlogViewDTO>> queryMyLikedBlogs() {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            return Result.fail("璇峰厛鐧诲綍");
+        }
+        return Result.ok(queryUserLikedBlogs(currentUser.getId(), 10));
+    }
+
     public Result<List<BlogViewDTO>> queryBlogByUser(Long userId, Integer current) {
         if (userId == null || userId <= 0) {
             return Result.fail("用户ID不合法");
@@ -169,15 +184,16 @@ public class BlogService {
 
         String userId = String.valueOf(currentUser.getId());
         String key = RedisConstants.BLOG_LIKED_KEY + id;
+        String userLikedKey = RedisConstants.BLOG_LIKED_USER_KEY + userId;
         String now = String.valueOf(System.currentTimeMillis());
-        Long action = stringRedisTemplate.execute(LIKE_SCRIPT, Collections.singletonList(key), userId, now);
+        Long action = stringRedisTemplate.execute(LIKE_SCRIPT, List.of(key, userLikedKey), userId, now, String.valueOf(id));
         if (action == null) {
             return Result.fail("点赞失败，请稍后重试");
         }
 
         int affectedRows = action > 0 ? blogRepository.increaseLiked(id) : blogRepository.decreaseLiked(id);
         if (affectedRows == 0) {
-            stringRedisTemplate.execute(ROLLBACK_LIKE_SCRIPT, Collections.singletonList(key), userId, String.valueOf(action), now);
+            stringRedisTemplate.execute(ROLLBACK_LIKE_SCRIPT, List.of(key, userLikedKey), userId, String.valueOf(action), now, String.valueOf(id));
             return Result.fail("点赞失败，请稍后重试");
         }
         return Result.ok(null);
@@ -200,6 +216,29 @@ public class BlogService {
             }
         }
         return Result.ok(users);
+    }
+
+    public List<BlogViewDTO> queryUserLikedBlogs(Long userId, int limit) {
+        int size = Math.max(1, Math.min(limit, 50));
+        Set<String> blogIds = stringRedisTemplate.opsForZSet()
+                .reverseRange(RedisConstants.BLOG_LIKED_USER_KEY + userId, 0, size - 1);
+        List<Blog> likedBlogs = new ArrayList<>();
+        if (blogIds != null && !blogIds.isEmpty()) {
+            for (String blogId : blogIds) {
+                Blog blog = blogRepository.findById(Long.valueOf(blogId));
+                if (blog != null) {
+                    likedBlogs.add(blog);
+                }
+            }
+        }
+        if (likedBlogs.isEmpty()) {
+            likedBlogs = blogRepository.findRecent(200).stream()
+                    .filter(blog -> stringRedisTemplate.opsForZSet()
+                            .score(RedisConstants.BLOG_LIKED_KEY + blog.getId(), String.valueOf(userId)) != null)
+                    .limit(size)
+                    .toList();
+        }
+        return toViewDTOList(likedBlogs.stream().limit(size).toList());
     }
 
     private Result<Void> validateCreateDTO(BlogCreateDTO createDTO) {
@@ -237,6 +276,7 @@ public class BlogService {
         dto.setUpdateTime(blog.getUpdateTime());
         fillAuthor(dto, blog.getUserId());
         dto.setIsLike(isCurrentUserLiked(blog.getId()));
+        dto.setIsFollow(isCurrentUserFollowed(blog.getUserId()));
         return dto;
     }
 
@@ -257,6 +297,14 @@ public class BlogService {
         Double score = stringRedisTemplate.opsForZSet()
                 .score(RedisConstants.BLOG_LIKED_KEY + blogId, String.valueOf(currentUser.getId()));
         return score != null;
+    }
+
+    private boolean isCurrentUserFollowed(Long authorId) {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null || authorId == null || currentUser.getId().equals(authorId)) {
+            return false;
+        }
+        return followRepository.exists(currentUser.getId(), authorId);
     }
 
     private int normalizeCurrent(Integer current) {

@@ -52,6 +52,7 @@ build/
 .env
 .env.local
 .env.*.local
+spotai/local-secrets.properties
 
 # Agent skills source (cloned repo)
 .kilo/

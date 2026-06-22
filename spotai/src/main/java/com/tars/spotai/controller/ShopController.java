@@ -39,6 +39,11 @@ public class ShopController {
     }
 
     /* 3. 更新商户信息并失效缓存 */
+    @GetMapping("/shop/search")
+    public Result<List<Shop>> searchShop(@RequestParam("keyword") String keyword) {
+        return shopService.search(keyword);
+    }
+
     @PutMapping("/shop")
     public Result<Void> updateShop(@RequestBody Shop shop) {
         return shopService.update(shop);

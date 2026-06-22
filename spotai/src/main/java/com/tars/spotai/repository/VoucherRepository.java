@@ -1,7 +1,9 @@
 package com.tars.spotai.repository;
 
 import com.tars.spotai.dto.SeckillVoucherDTO;
+import com.tars.spotai.dto.UserVoucherDTO;
 import com.tars.spotai.dto.VoucherDTO;
+import com.tars.spotai.dto.VoucherActivityDTO;
 import com.tars.spotai.entity.SeckillVoucher;
 import com.tars.spotai.entity.Voucher;
 import com.tars.spotai.utils.ShardUtils;
@@ -14,6 +16,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Repository
 public class VoucherRepository {
@@ -96,6 +100,55 @@ public class VoucherRepository {
         }
     }
 
+    public List<VoucherActivityDTO> findAvailableActivities(LocalDateTime now, int limit) {
+        List<VoucherActivityDTO> activities = new ArrayList<>();
+        for (int shard = 0; shard < 2; shard++) {
+            activities.addAll(jdbcTemplate.query(
+                    """
+                            select v.id, v.shop_id, s.name as shop_name, v.title, v.sub_title, v.rules,
+                                   v.pay_value, v.actual_value, v.type, v.status,
+                                   sv.init_stock, sv.stock, sv.begin_time, sv.end_time
+                            from tb_voucher_%d v
+                            left join tb_seckill_voucher_%d sv on sv.voucher_id = v.id
+                            left join tb_shop s on s.id = v.shop_id
+                            where v.status = 1
+                              and (
+                                v.type = 0
+                                or (v.type = 1 and sv.end_time >= ?)
+                              )
+                            order by
+                              case
+                                when v.type = 1 and sv.begin_time <= ? and sv.end_time >= ? then 0
+                                when v.type = 1 and sv.begin_time > ? then 1
+                                else 2
+                              end,
+                              sv.begin_time asc,
+                              v.create_time desc
+                            limit ?
+                            """.formatted(shard, shard),
+                    new VoucherActivityRowMapper(),
+                    now,
+                    now,
+                    now,
+                    now,
+                    Math.max(1, Math.min(limit, 50))
+            ));
+        }
+        return activities.stream()
+                .sorted((left, right) -> {
+                    int leftRank = activityRank(left, now);
+                    int rightRank = activityRank(right, now);
+                    if (leftRank != rightRank) {
+                        return Integer.compare(leftRank, rightRank);
+                    }
+                    LocalDateTime leftTime = left.getBeginTime() == null ? LocalDateTime.MAX : left.getBeginTime();
+                    LocalDateTime rightTime = right.getBeginTime() == null ? LocalDateTime.MAX : right.getBeginTime();
+                    return leftTime.compareTo(rightTime);
+                })
+                .limit(Math.max(1, Math.min(limit, 50)))
+                .toList();
+    }
+
     public boolean existsOrder(Long userId, Long voucherId) {
         Integer count = jdbcTemplate.queryForObject(
                 """
@@ -148,6 +201,41 @@ public class VoucherRepository {
                 userId,
                 voucherId
         );
+    }
+
+    public List<UserVoucherDTO> findOrdersByUserId(Long userId, int limit) {
+        return jdbcTemplate.query(
+                """
+                        select id, voucher_id, status, create_time
+                        from %s
+                        where user_id = ?
+                        order by create_time desc, id desc
+                        limit ?
+                        """.formatted(ShardUtils.voucherOrderTable(userId)),
+                (rs, rowNum) -> {
+                    UserVoucherDTO dto = new UserVoucherDTO();
+                    dto.setOrderId(rs.getLong("id"));
+                    dto.setVoucherId(rs.getLong("voucher_id"));
+                    dto.setStatus(rs.getObject("status", Integer.class));
+                    dto.setCreateTime(toLocalDateTime(rs.getTimestamp("create_time")));
+                    return dto;
+                },
+                userId,
+                Math.max(1, Math.min(limit, 50))
+        );
+    }
+
+    public int countOrdersByUserId(Long userId) {
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                        select count(1)
+                        from %s
+                        where user_id = ?
+                        """.formatted(ShardUtils.voucherOrderTable(userId)),
+                Integer.class,
+                userId
+        );
+        return count == null ? 0 : count;
     }
 
     public void insertVoucherOrderRouter(Long id, Long orderId, Long userId, Long voucherId) {
@@ -237,6 +325,41 @@ public class VoucherRepository {
             voucher.setUpdateTime(toLocalDateTime(rs.getTimestamp("update_time")));
             return voucher;
         }
+    }
+
+    private static class VoucherActivityRowMapper implements RowMapper<VoucherActivityDTO> {
+        @Override
+        public VoucherActivityDTO mapRow(ResultSet rs, int rowNum) throws SQLException {
+            VoucherActivityDTO activity = new VoucherActivityDTO();
+            activity.setId(rs.getLong("id"));
+            activity.setShopId(rs.getLong("shop_id"));
+            activity.setShopName(rs.getString("shop_name"));
+            activity.setTitle(rs.getString("title"));
+            activity.setSubTitle(rs.getString("sub_title"));
+            activity.setRules(rs.getString("rules"));
+            activity.setPayValue(rs.getLong("pay_value"));
+            activity.setActualValue(rs.getLong("actual_value"));
+            activity.setType(rs.getInt("type"));
+            activity.setStatus(rs.getInt("status"));
+            activity.setInitStock(rs.getObject("init_stock", Integer.class));
+            activity.setStock(rs.getObject("stock", Integer.class));
+            activity.setBeginTime(toLocalDateTime(rs.getTimestamp("begin_time")));
+            activity.setEndTime(toLocalDateTime(rs.getTimestamp("end_time")));
+            return activity;
+        }
+    }
+
+    private static int activityRank(VoucherActivityDTO activity, LocalDateTime now) {
+        if (activity.getType() != null && activity.getType() == 1) {
+            if (activity.getBeginTime() != null && activity.getEndTime() != null
+                    && !now.isBefore(activity.getBeginTime()) && !now.isAfter(activity.getEndTime())) {
+                return 0;
+            }
+            if (activity.getBeginTime() != null && now.isBefore(activity.getBeginTime())) {
+                return 1;
+            }
+        }
+        return 2;
     }
 
     private static class SeckillVoucherRowMapper implements RowMapper<SeckillVoucher> {

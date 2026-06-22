@@ -22,76 +22,65 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Service for user authentication, registration, and profile retrieval.
- * Handles SMS code sending, phone-code login, and auto-registration of new users.
+ * Handles email-code login and first-login registration.
  */
 @Service
 public class UserService {
-    /* 1. 依赖注入 */
     private final StringRedisTemplate stringRedisTemplate;
     private final UserRepository userRepository;
-    private final SmsService smsService;
+    private final EmailService emailService;
     private final AuthProperties authProperties;
     private final Random random = new Random();
 
     public UserService(StringRedisTemplate stringRedisTemplate,
                        UserRepository userRepository,
-                       SmsService smsService,
+                       EmailService emailService,
                        AuthProperties authProperties) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.userRepository = userRepository;
-        this.smsService = smsService;
+        this.emailService = emailService;
         this.authProperties = authProperties;
     }
 
-    /* ========== 业务方法 ========== */
-
-    /* 2. 发送验证码 */
-    public Result<Void> sendCode(String phone) {
-        /* 2.1 校验手机号格式 */
-        if (RegexUtils.isPhoneInvalid(phone)) {
-            return Result.fail("手机号格式错误");
+    public Result<Void> sendCode(String email) {
+        String normalizedEmail = normalizeEmail(email);
+        if (RegexUtils.isEmailInvalid(normalizedEmail)) {
+            return Result.fail("邮箱格式错误");
         }
-        /* 2.2 生成 6 位随机码并缓存到 Redis */
         String code = String.format("%06d", random.nextInt(1_000_000));
         stringRedisTemplate.opsForValue().set(
-                RedisConstants.LOGIN_CODE_KEY + phone,
+                RedisConstants.LOGIN_CODE_KEY + normalizedEmail,
                 code,
                 authProperties.getCodeTtlMinutes(),
                 TimeUnit.MINUTES
         );
-        /* 2.3 发送验证码（开发环境为日志输出） */
-        smsService.sendCode(phone, code);
+        emailService.sendCode(normalizedEmail, code);
         return Result.ok(null);
     }
 
-    /* 3. 登录（手机号 + 验证码） */
     public Result<String> login(LoginFormDTO loginForm) {
-        String phone = loginForm.getPhone();
+        String email = normalizeEmail(loginForm.getEmail());
         String code = loginForm.getCode();
 
-        /* 3.1 参数校验 */
-        if (RegexUtils.isPhoneInvalid(phone)) {
-            return Result.fail("手机号格式错误");
+        if (RegexUtils.isEmailInvalid(email)) {
+            return Result.fail("邮箱格式错误");
         }
         if (RegexUtils.isCodeInvalid(code)) {
             return Result.fail("验证码格式错误");
         }
 
-        /* 3.2 校验验证码 */
-        String cacheCode = stringRedisTemplate.opsForValue().get(RedisConstants.LOGIN_CODE_KEY + phone);
+        String codeKey = RedisConstants.LOGIN_CODE_KEY + email;
+        String cacheCode = stringRedisTemplate.opsForValue().get(codeKey);
         if (!StringUtils.hasText(cacheCode) || !cacheCode.equals(code)) {
             return Result.fail("验证码错误或已过期");
         }
 
-        /* 3.3 查询或创建用户 */
-        User user = userRepository.findByPhone(phone);
+        User user = userRepository.findByEmail(email);
         if (user == null) {
-            user = createUser(phone);
-            userRepository.saveUserWithPhone(user, IdWorker.getId());
+            user = createUser(email);
+            userRepository.saveUserWithEmail(user, IdWorker.getId());
         }
 
-        /* 3.4 生成 Token，存入 Redis Hash */
         String token = compactUuid();
         UserDTO userDTO = toUserDTO(user);
         Map<String, String> userMap = new HashMap<>();
@@ -102,11 +91,10 @@ public class UserService {
         String tokenKey = RedisConstants.LOGIN_TOKEN_KEY + token;
         stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
         stringRedisTemplate.expire(tokenKey, authProperties.getTokenTtlMinutes(), TimeUnit.MINUTES);
-        stringRedisTemplate.delete(RedisConstants.LOGIN_CODE_KEY + phone);
+        stringRedisTemplate.delete(codeKey);
         return Result.ok(token);
     }
 
-    /* 4. 获取当前登录用户信息 */
     public Result<UserDTO> me() {
         UserDTO user = UserHolder.getUser();
         if (user == null) {
@@ -115,14 +103,11 @@ public class UserService {
         return Result.ok(user);
     }
 
-    /* ========== 私有辅助方法 ========== */
-
-    /* 5. 创建新用户 */
-    private User createUser(String phone) {
+    private User createUser(String email) {
         LocalDateTime now = LocalDateTime.now();
         User user = new User();
         user.setId(IdWorker.getId());
-        user.setPhone(phone);
+        user.setEmail(email);
         user.setPassword("");
         user.setNickName("user_" + compactUuid().substring(0, 8));
         user.setIcon("");
@@ -131,12 +116,14 @@ public class UserService {
         return user;
     }
 
-    /* 6. User -> UserDTO */
     private UserDTO toUserDTO(User user) {
         return new UserDTO(user.getId(), user.getNickName(), user.getIcon());
     }
 
-    /* 7. 生成无横线的 UUID */
+    private String normalizeEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase();
+    }
+
     private String compactUuid() {
         return UUID.randomUUID().toString().replace("-", "");
     }

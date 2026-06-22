@@ -138,6 +138,14 @@ public class ShopService {
         return Result.ok(shops);
     }
 
+    public Result<List<Shop>> search(String keyword) {
+        String value = keyword == null ? "" : keyword.trim();
+        if (value.isEmpty()) {
+            return Result.ok(List.of());
+        }
+        return Result.ok(shopRepository.search(value, 12));
+    }
+
     public void loadShopGeo() {
         Map<Long, List<Shop>> shopsByType = shopRepository.findAll().stream()
                 .filter(shop -> shop.getTypeId() != null && shop.getX() != null && shop.getY() != null)

@@ -60,4 +60,22 @@ public class FollowRepository {
                 followUserId
         );
     }
+
+    public int countFollows(Long userId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from tb_follow where user_id = ?",
+                Integer.class,
+                userId
+        );
+        return count == null ? 0 : count;
+    }
+
+    public int countFans(Long followUserId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from tb_follow where follow_user_id = ?",
+                Integer.class,
+                followUserId
+        );
+        return count == null ? 0 : count;
+    }
 }

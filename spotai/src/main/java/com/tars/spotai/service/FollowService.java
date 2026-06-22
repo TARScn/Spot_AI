@@ -22,15 +22,18 @@ public class FollowService {
     private final UserRepository userRepository;
     private final RedisIdWorker redisIdWorker;
     private final StringRedisTemplate stringRedisTemplate;
+    private final FeedService feedService;
 
     public FollowService(FollowRepository followRepository,
                          UserRepository userRepository,
                          RedisIdWorker redisIdWorker,
-                         StringRedisTemplate stringRedisTemplate) {
+                         StringRedisTemplate stringRedisTemplate,
+                         FeedService feedService) {
         this.followRepository = followRepository;
         this.userRepository = userRepository;
         this.redisIdWorker = redisIdWorker;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.feedService = feedService;
     }
 
     public Result<Void> follow(Long followUserId, Boolean isFollow) {
@@ -95,6 +98,7 @@ public class FollowService {
     private Result<Void> followUser(Long currentUserId, Long followUserId) {
         if (followRepository.exists(currentUserId, followUserId)) {
             syncFollowToRedis(currentUserId, followUserId);
+            feedService.backfillAuthorBlogsToFollower(currentUserId, followUserId);
             return Result.ok(null);
         }
         try {
@@ -103,6 +107,7 @@ public class FollowService {
             // Unique index makes repeated follow requests idempotent.
         }
         syncFollowToRedis(currentUserId, followUserId);
+        feedService.backfillAuthorBlogsToFollower(currentUserId, followUserId);
         return Result.ok(null);
     }
 
@@ -110,6 +115,7 @@ public class FollowService {
         followRepository.delete(currentUserId, followUserId);
         stringRedisTemplate.opsForSet().remove(RedisConstants.FOLLOW_KEY + currentUserId, String.valueOf(followUserId));
         stringRedisTemplate.opsForSet().remove(RedisConstants.FOLLOWERS_KEY + followUserId, String.valueOf(currentUserId));
+        removeAuthorBlogsFromFeed(currentUserId, followUserId);
         return Result.ok(null);
     }
 
@@ -129,6 +135,17 @@ public class FollowService {
     private void syncFollowToRedis(Long currentUserId, Long followUserId) {
         stringRedisTemplate.opsForSet().add(RedisConstants.FOLLOW_KEY + currentUserId, String.valueOf(followUserId));
         stringRedisTemplate.opsForSet().add(RedisConstants.FOLLOWERS_KEY + followUserId, String.valueOf(currentUserId));
+    }
+
+    private void removeAuthorBlogsFromFeed(Long currentUserId, Long followUserId) {
+        List<Long> blogIds = feedService.queryAuthorRecentBlogIds(followUserId, 50);
+        if (blogIds.isEmpty()) {
+            return;
+        }
+        stringRedisTemplate.opsForZSet().remove(
+                RedisConstants.FEED_KEY + currentUserId,
+                blogIds.stream().map(String::valueOf).toArray()
+        );
     }
 
     private void loadFollowSet(Long userId) {

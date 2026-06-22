@@ -51,6 +51,11 @@ spring:
 
 rocketmq:
   name-server: localhost:9876
+
+spotai:
+  minio:
+    endpoint: http://localhost:19000
+    external-endpoint: http://localhost:19000
 ```
 
 这些配置也支持环境变量覆盖，例如：
@@ -59,11 +64,22 @@ rocketmq:
 $env:MYSQL_PASSWORD="你的密码"
 $env:REDIS_PASSWORD="你的密码"
 $env:ROCKETMQ_NAME_SERVER="localhost:9876"
+$env:MINIO_SECRET_KEY="admin000000"
+$env:MINIO_ENDPOINT="http://localhost:19000"
+$env:MINIO_EXTERNAL_ENDPOINT="http://localhost:19000"
+```
+
+也可以在本地忽略文件 `spotai/local-secrets.properties` 中配置敏感信息：
+
+```properties
+MINIO_SECRET_KEY=admin000000
+MINIO_ENDPOINT=http://localhost:19000
+MINIO_EXTERNAL_ENDPOINT=http://localhost:19000
 ```
 
 ## 启动项目
 
-建议启动顺序：MySQL -> Redis -> RocketMQ -> 后端 -> 前端。
+建议启动顺序：MySQL -> Redis -> RocketMQ -> MinIO -> 后端 -> 前端。
 
 ### 1. 启动 Redis
 
@@ -91,7 +107,57 @@ jps
 
 看到 `NamesrvStartup` 和 `BrokerStartup` 表示 RocketMQ 已启动。
 
-### 3. 启动后端
+### 3. 启动 MinIO
+
+Windows 上如果 `9000/9001` 端口被系统保留，可以使用本项目当前推荐端口 `19000/19001`：
+
+```powershell
+cd E:\tools
+
+$env:MINIO_ROOT_USER="admin"
+$env:MINIO_ROOT_PASSWORD="admin000000"
+
+.\minio.exe server E:\tools\minio-data --address ":19000" --console-address ":19001"
+```
+
+MinIO 地址：
+
+```text
+API: http://localhost:19000
+Console: http://localhost:19001
+```
+
+控制台登录：
+
+```text
+账号：admin
+密码：admin000000
+```
+
+如果希望后台启动：
+
+```powershell
+cd E:\aaaWS\vscode_ws\java_ws\Spot_AI
+
+$env:MINIO_ROOT_USER="admin"
+$env:MINIO_ROOT_PASSWORD="admin000000"
+
+Start-Process -FilePath "E:\tools\minio.exe" `
+  -ArgumentList @("server", "E:\tools\minio-data", "--address", ":19000", "--console-address", ":19001") `
+  -RedirectStandardOutput "minio.log" `
+  -RedirectStandardError "minio.err.log" `
+  -WindowStyle Hidden
+```
+
+验证 MinIO：
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:19000/minio/health/live
+```
+
+返回 `200` 表示 MinIO 可用。启动或修改 MinIO 端口后，需要重启后端。
+
+### 4. 启动后端
 
 在项目根目录执行：
 
@@ -108,7 +174,7 @@ http://localhost:8080
 
 如果已启动 MinIO，并希望后端初始化 bucket，可以去掉 `--spotai.minio.initialize-bucket=false`。
 
-### 4. 启动前端
+### 5. 启动前端
 
 在项目根目录执行：
 
@@ -170,7 +236,24 @@ $pids = Get-NetTCPConnection -State Listen -LocalPort 8080 -ErrorAction Silently
 $pids | ForEach-Object { Stop-Process -Id $_ -Force }
 ```
 
-### 3. 关闭 RocketMQ
+### 3. 关闭 MinIO
+
+如果是在终端中运行 `minio.exe server`，按 `Ctrl + C`。
+
+如果是后台进程，可按端口关闭：
+
+```powershell
+$pids = Get-NetTCPConnection -State Listen -LocalPort 19000,19001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+$pids | ForEach-Object { Stop-Process -Id $_ -Force }
+```
+
+也可以直接按进程名关闭：
+
+```powershell
+Get-Process -Name minio -ErrorAction SilentlyContinue | Stop-Process -Force
+```
+
+### 4. 关闭 RocketMQ
 
 如果 RocketMQ 在 WSL 中运行：
 
@@ -188,7 +271,7 @@ wsl --terminate Ubuntu
 
 注意：这会同时停止 WSL 中运行的 Redis、RocketMQ 和其他后台服务。
 
-### 4. 关闭 Redis
+### 5. 关闭 Redis
 
 如果 Redis 在 WSL 中运行：
 
@@ -198,12 +281,12 @@ sudo service redis-server stop
 
 如果你使用 `wsl --terminate Ubuntu`，Redis 会随 WSL 一起停止。
 
-### 5. 一键清理本项目常见后台进程
+### 6. 一键清理本项目常见后台进程
 
 在项目根目录运行：
 
 ```powershell
-$ports = 8080,5173,6379,9876,10911,10909,10912
+$ports = 8080,5173,6379,9876,10911,10909,10912,19000,19001
 Get-NetTCPConnection -State Listen -LocalPort $ports -ErrorAction SilentlyContinue |
   Select-Object -ExpandProperty OwningProcess -Unique |
   ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }

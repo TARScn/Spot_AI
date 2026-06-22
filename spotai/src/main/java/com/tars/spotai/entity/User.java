@@ -15,7 +15,7 @@ import java.time.LocalDateTime;
 public class User {
     /* 1. 标识 */
     private Long id;
-    private String phone;
+    private String email;
     private String password;
     private String nickName;
     private String icon;

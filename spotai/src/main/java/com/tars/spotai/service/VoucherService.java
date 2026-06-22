@@ -4,6 +4,7 @@ import com.tars.spotai.config.VoucherProperties;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.SeckillVoucherDTO;
 import com.tars.spotai.dto.UserDTO;
+import com.tars.spotai.dto.VoucherActivityDTO;
 import com.tars.spotai.dto.VoucherDTO;
 import com.tars.spotai.dto.VoucherOrderMessage;
 import com.tars.spotai.entity.SeckillVoucher;
@@ -118,6 +119,48 @@ public class VoucherService {
         return Result.ok(voucherId);
     }
 
+    public Result<List<VoucherActivityDTO>> queryActivities() {
+        LocalDateTime now = LocalDateTime.now();
+        List<VoucherActivityDTO> activities = voucherRepository.findAvailableActivities(now, 30);
+        for (VoucherActivityDTO activity : activities) {
+            activity.setActivityStatus(resolveActivityStatus(activity, now));
+        }
+        return Result.ok(activities);
+    }
+
+    public Result<Long> claimVoucher(Long voucherId) {
+        UserDTO user = UserHolder.getUser();
+        if (user == null || user.getId() == null) {
+            return Result.fail("请先登录");
+        }
+        if (voucherId == null || voucherId <= 0) {
+            return Result.fail("优惠券ID不合法");
+        }
+
+        Voucher voucher = voucherRepository.findVoucherById(voucherId);
+        if (voucher == null || voucher.getType() != VOUCHER_TYPE_NORMAL) {
+            return Result.fail("代金券不存在");
+        }
+        if (voucher.getStatus() != VOUCHER_STATUS_ON_SHELF) {
+            return Result.fail("代金券不可用");
+        }
+        if (voucherRepository.existsOrder(user.getId(), voucherId)) {
+            return Result.fail("不能重复领取");
+        }
+
+        Long orderId = redisIdWorker.nextId("voucher_order");
+        transactionTemplate.executeWithoutResult(status -> {
+            voucherRepository.insertVoucherOrder(orderId, user.getId(), voucherId);
+            voucherRepository.insertVoucherOrderRouter(
+                    redisIdWorker.nextId("voucher_order_router"),
+                    orderId,
+                    user.getId(),
+                    voucherId
+            );
+        });
+        return Result.ok(orderId);
+    }
+
     public Result<Long> seckillVoucher(Long voucherId) {
         UserDTO user = UserHolder.getUser();
         if (user == null || user.getId() == null) {
@@ -129,6 +172,7 @@ public class VoucherService {
         }
 
         Long userId = user.getId();
+        ensureRedisSeckillStock(voucherId);
         Long result = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
                 List.of(RedisConstants.SECKILL_STOCK_KEY + voucherId, RedisConstants.SECKILL_ORDER_KEY + voucherId),
@@ -161,6 +205,33 @@ public class VoucherService {
         }
 
         return Result.ok(orderId);
+    }
+
+    private void ensureRedisSeckillStock(Long voucherId) {
+        String stockKey = RedisConstants.SECKILL_STOCK_KEY + voucherId;
+        if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(stockKey))) {
+            return;
+        }
+        Integer stock = voucherRepository.queryStock(voucherId);
+        if (stock != null) {
+            stringRedisTemplate.opsForValue().set(stockKey, stock.toString());
+        }
+    }
+
+    private String resolveActivityStatus(VoucherActivityDTO activity, LocalDateTime now) {
+        if (activity.getType() == null || activity.getType() == VOUCHER_TYPE_NORMAL) {
+            return "AVAILABLE";
+        }
+        if (activity.getBeginTime() != null && now.isBefore(activity.getBeginTime())) {
+            return "UPCOMING";
+        }
+        if (activity.getEndTime() != null && now.isAfter(activity.getEndTime())) {
+            return "ENDED";
+        }
+        if (activity.getStock() != null && activity.getStock() <= 0) {
+            return "SOLD_OUT";
+        }
+        return "ACTIVE";
     }
 
     public void handleVoucherOrder(VoucherOrderMessage message) {

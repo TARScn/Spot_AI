@@ -2,9 +2,12 @@ package com.tars.spotai.service;
 
 import com.tars.spotai.config.MinioProperties;
 import com.tars.spotai.dto.FileUploadDTO;
+import io.minio.BucketExistsArgs;
+import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.SetBucketPolicyArgs;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -40,6 +43,7 @@ public class FileStorageService {
                 ? file.getContentType()
                 : DEFAULT_CONTENT_TYPE;
         try (InputStream inputStream = file.getInputStream()) {
+            ensureBucket();
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(properties.getBucket())
                     .object(objectName)
@@ -48,7 +52,7 @@ public class FileStorageService {
                     .build());
             return new FileUploadDTO(objectName, buildPublicUrl(objectName), contentType, file.getSize());
         } catch (Exception e) {
-            throw new IllegalStateException("文件上传失败", e);
+            throw new IllegalStateException("文件上传失败：" + e.getMessage(), e);
         }
     }
 
@@ -62,7 +66,24 @@ public class FileStorageService {
                     .object(normalizeObjectName(objectName))
                     .build());
         } catch (Exception e) {
-            throw new IllegalStateException("文件删除失败", e);
+            throw new IllegalStateException("文件删除失败：" + e.getMessage(), e);
+        }
+    }
+
+    private void ensureBucket() throws Exception {
+        boolean exists = minioClient.bucketExists(BucketExistsArgs.builder()
+                .bucket(properties.getBucket())
+                .build());
+        if (!exists) {
+            minioClient.makeBucket(MakeBucketArgs.builder()
+                    .bucket(properties.getBucket())
+                    .build());
+        }
+        if (properties.isPublicRead()) {
+            minioClient.setBucketPolicy(SetBucketPolicyArgs.builder()
+                    .bucket(properties.getBucket())
+                    .config(publicReadPolicy(properties.getBucket()))
+                    .build());
         }
     }
 
@@ -101,5 +122,21 @@ public class FileStorageService {
         return properties.getExternalEndpoint().replaceAll("/+$", "")
                 + "/" + properties.getBucket()
                 + "/" + objectName;
+    }
+
+    private String publicReadPolicy(String bucket) {
+        return """
+                {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Principal": {"AWS": ["*"]},
+                      "Action": ["s3:GetObject"],
+                      "Resource": ["arn:aws:s3:::%s/*"]
+                    }
+                  ]
+                }
+                """.formatted(bucket);
     }
 }

@@ -5,7 +5,7 @@ package com.tars.spotai.utils;
  */
 public final class RedisConstants {
     /* ---- Key 前缀 ---- */
-    /** 1. 登录验证码缓存 key（后缀：手机号） */
+    /** 1. 登录验证码缓存 key（后缀：邮箱） */
     public static final String LOGIN_CODE_KEY = "login:code:";
 
     /** 2. 登录 Token 缓存 key（后缀：token 字符串） */
@@ -45,6 +45,8 @@ public final class RedisConstants {
 
     /** 13. 探店笔记点赞 ZSet key（后缀：blogId） */
     public static final String BLOG_LIKED_KEY = "blog:liked:";
+
+    public static final String BLOG_LIKED_USER_KEY = "blog:liked:user:";
 
     /** 14. 用户关注集合 key（后缀：userId） */
     public static final String FOLLOW_KEY = "follows:";

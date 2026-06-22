@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: spotai
+  config:
+    import: optional:file:./local-secrets.properties
   servlet:
     multipart:
       max-file-size: 10MB
@@ -12,13 +14,28 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${MYSQL_URL:jdbc:mysql://localhost:3306/spotai_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
     username: ${MYSQL_USERNAME:root}
-    password: ${MYSQL_PASSWORD:000000}
+    password: ${MYSQL_PASSWORD}
+  mail:
+    host: ${MAIL_HOST:smtp.qq.com}
+    port: ${MAIL_PORT:465}
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+          connectiontimeout: 10000
+          timeout: 10000
+          writetimeout: 10000
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       database: ${REDIS_DATABASE:0}
-      password: ${REDIS_PASSWORD:540788}
+      password: ${REDIS_PASSWORD}
       timeout: 3s
 
 rocketmq:
@@ -35,10 +52,10 @@ spotai:
     order-topic: spotai.voucher-order.create
     order-consumer-group: spotai-voucher-order-consumer
   minio:
-    endpoint: http://localhost:9000
-    external-endpoint: http://localhost:9000
+    endpoint: ${MINIO_ENDPOINT:http://localhost:19000}
+    external-endpoint: ${MINIO_EXTERNAL_ENDPOINT:http://localhost:19000}
     access-key: admin
-    secret-key: "000000"
+    secret-key: ${MINIO_SECRET_KEY}
     bucket: spotai
     blog-prefix: blog
     public-read: true

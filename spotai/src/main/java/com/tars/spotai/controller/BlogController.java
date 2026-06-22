@@ -45,6 +45,11 @@ public class BlogController {
         return blogService.queryMyBlog(current);
     }
 
+    @GetMapping("/blog/liked/me")
+    public Result<List<BlogViewDTO>> queryMyLikedBlogs() {
+        return blogService.queryMyLikedBlogs();
+    }
+
     @GetMapping("/blog/of/user")
     public Result<List<BlogViewDTO>> queryBlogByUser(@RequestParam("id") Long userId,
                                                      @RequestParam(defaultValue = "1") Integer current) {

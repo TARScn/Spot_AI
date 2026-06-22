@@ -14,6 +14,11 @@ public class VoucherOrderController {
         this.voucherService = voucherService;
     }
 
+    @PostMapping("/voucher-order/{voucherId}")
+    public Result<Long> claimVoucher(@PathVariable Long voucherId) {
+        return voucherService.claimVoucher(voucherId);
+    }
+
     @PostMapping("/voucher-order/seckill/{voucherId}")
     public Result<Long> seckillVoucher(@PathVariable Long voucherId) {
         return voucherService.seckillVoucher(voucherId);

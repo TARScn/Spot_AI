@@ -2,12 +2,16 @@ package com.tars.spotai.controller;
 
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.SeckillVoucherDTO;
+import com.tars.spotai.dto.VoucherActivityDTO;
 import com.tars.spotai.dto.VoucherDTO;
 import com.tars.spotai.service.VoucherService;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 public class VoucherController {
@@ -15,6 +19,11 @@ public class VoucherController {
 
     public VoucherController(VoucherService voucherService) {
         this.voucherService = voucherService;
+    }
+
+    @GetMapping("/voucher/activities")
+    public Result<List<VoucherActivityDTO>> listActivities() {
+        return voucherService.queryActivities();
     }
 
     @PostMapping("/voucher")

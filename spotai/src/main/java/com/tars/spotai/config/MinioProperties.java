@@ -10,7 +10,7 @@ public class MinioProperties {
     private String endpoint = "http://localhost:9000";
     private String externalEndpoint = "http://localhost:9000";
     private String accessKey = "admin";
-    private String secretKey = "000000";
+    private String secretKey = "";
     private String bucket = "spotai";
     private String blogPrefix = "blog";
     private boolean publicRead = true;

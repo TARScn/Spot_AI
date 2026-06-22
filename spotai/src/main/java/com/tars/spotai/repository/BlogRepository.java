@@ -10,7 +10,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Repository
 public class BlogRepository {
@@ -90,6 +92,46 @@ public class BlogRepository {
         );
     }
 
+    public List<Blog> findRecentByUserId(Long userId, int limit) {
+        return jdbcTemplate.query(
+                """
+                        select id, shop_id, user_id, title, images, content, liked, comments, create_time, update_time
+                        from tb_blog
+                        where user_id = ?
+                        order by create_time desc, id desc
+                        limit ?
+                        """,
+                new BlogRowMapper(),
+                userId,
+                Math.max(1, Math.min(limit, 50))
+        );
+    }
+
+    public List<Blog> findRecentByUserIds(List<Long> userIds, int limit) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String placeholders = userIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        Object[] args = new Object[userIds.size() + 1];
+        for (int index = 0; index < userIds.size(); index++) {
+            args[index] = userIds.get(index);
+        }
+        args[userIds.size()] = Math.max(1, Math.min(limit, 50));
+        return jdbcTemplate.query(
+                """
+                        select id, shop_id, user_id, title, images, content, liked, comments, create_time, update_time
+                        from tb_blog
+                        where user_id in (
+                        """ + placeholders + """
+                        )
+                        order by create_time desc, id desc
+                        limit ?
+                        """,
+                new BlogRowMapper(),
+                args
+        );
+    }
+
     public List<Blog> findByShopId(Long shopId, int current) {
         int offset = offset(current);
         return jdbcTemplate.query(
@@ -105,6 +147,28 @@ public class BlogRepository {
                 offset,
                 PAGE_SIZE
         );
+    }
+
+    public List<Blog> findRecent(int limit) {
+        return jdbcTemplate.query(
+                """
+                        select id, shop_id, user_id, title, images, content, liked, comments, create_time, update_time
+                        from tb_blog
+                        order by create_time desc, id desc
+                        limit ?
+                        """,
+                new BlogRowMapper(),
+                Math.max(1, Math.min(limit, 200))
+        );
+    }
+
+    public int countByUserId(Long userId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from tb_blog where user_id = ?",
+                Integer.class,
+                userId
+        );
+        return count == null ? 0 : count;
     }
 
     public int increaseLiked(Long id) {

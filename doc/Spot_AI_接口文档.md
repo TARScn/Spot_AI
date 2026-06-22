@@ -67,7 +67,7 @@ http://127.0.0.1:5173
 {
   "success": false,
   "data": null,
-  "errorMsg": "手机号格式错误"
+  "errorMsg": "邮箱格式错误"
 }
 ```
 
@@ -120,8 +120,8 @@ GET, POST, PUT, DELETE, OPTIONS
 
 | 模块 | 方法 | 路径 | 是否需要登录 | 说明 |
 |---|---|---|---|---|
-| 用户 | `POST` | `/user/code` | 否 | 发送短信验证码，当前通过日志模拟短信。 |
-| 用户 | `POST` | `/user/login` | 否 | 手机号验证码登录；用户不存在时自动注册。 |
+| 用户 | `POST` | `/user/code` | 否 | 发送邮箱验证码，通过 Resend API 发送。 |
+| 用户 | `POST` | `/user/login` | 否 | 邮箱验证码登录；用户不存在时自动注册。 |
 | 用户 | `GET` | `/user/me` | 是 | 获取当前登录用户信息。 |
 | 用户 | `POST` | `/user/sign` | 是 | 当前登录用户每日签到，使用 Redis BitMap 记录。 |
 | 用户 | `GET` | `/user/sign/count` | 是 | 查询当前登录用户当月连续签到天数。 |
@@ -162,18 +162,18 @@ POST /user/code
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `phone` | string | 是 | 中国大陆 11 位手机号。 |
+| `email` | string | 是 | 用户邮箱地址。 |
 
-手机号校验规则：
+邮箱校验规则：
 
 ```text
-^1[3-9]\d{9}$
+^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$
 ```
 
 请求示例：
 
 ```http
-POST /user/code?phone=13800138000
+POST /user/code?email=user@example.com
 ```
 
 成功响应：
@@ -190,23 +190,23 @@ POST /user/code?phone=13800138000
 
 | 场景 | 响应 |
 |---|---|
-| 手机号格式错误 | `{"success":false,"data":null,"errorMsg":"手机号格式错误"}` |
-| 缺少 `phone` 参数 | `{"success":false,"data":null,"errorMsg":"缺少参数：phone"}` |
+| 邮箱格式错误 | `{"success":false,"data":null,"errorMsg":"邮箱格式错误"}` |
+| 缺少 `email` 参数 | `{"success":false,"data":null,"errorMsg":"缺少参数：email"}` |
 
 后端行为：
 
-1. 校验手机号。
+1. 校验邮箱。
 2. 生成 6 位数字验证码。
-3. 写入 Redis：`login:code:{phone}`，TTL 为 5 分钟。
-4. 通过日志模拟短信发送。
+3. 写入 Redis：`login:code:{email}`，TTL 为 5 分钟。
+4. 通过 Resend API 发送邮件。
 
 验证码日志示例：
 
 ```text
-SpotAI login code for phone 13800138000 is 123456
+SpotAI login code for email user@example.com is 123456
 ```
 
-### 4.2 手机号验证码登录
+### 4.2 邮箱验证码登录
 
 ```http
 POST /user/login
@@ -224,14 +224,14 @@ Content-Type: application/json
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `phone` | string | 是 | 中国大陆 11 位手机号。 |
-| `code` | string | 是 | 6 位短信验证码。 |
+| `email` | string | 是 | 用户邮箱地址。 |
+| `code` | string | 是 | 6 位邮箱验证码。 |
 
 请求示例：
 
 ```json
 {
-  "phone": "13800138000",
+  "email": "user@example.com",
   "code": "123456"
 }
 ```
@@ -252,17 +252,17 @@ Content-Type: application/json
 
 | 场景 | 响应 |
 |---|---|
-| 手机号格式错误 | `{"success":false,"data":null,"errorMsg":"手机号格式错误"}` |
+| 邮箱格式错误 | `{"success":false,"data":null,"errorMsg":"邮箱格式错误"}` |
 | 验证码格式错误 | `{"success":false,"data":null,"errorMsg":"验证码格式错误"}` |
 | 验证码错误或过期 | `{"success":false,"data":null,"errorMsg":"验证码错误或已过期"}` |
 
 后端行为：
 
-1. 校验手机号和验证码格式。
-2. 从 Redis 读取 `login:code:{phone}`。
+1. 校验邮箱和验证码格式。
+2. 从 Redis 读取 `login:code:{email}`。
 3. 验证码不存在或不匹配时登录失败。
-4. 验证通过后，根据手机号查询用户。
-5. 用户不存在时自动注册，写入 `tb_user_0/1` 和 `tb_user_phone_0/1`。
+4. 验证通过后，根据邮箱查询用户。
+5. 用户不存在时自动注册，写入 `tb_user_0/1` 和 `tb_user_email_0/1`。
 6. 生成 token。
 7. 将用户摘要写入 Redis Hash：`login:token:{token}`。
 8. 删除已使用的验证码。
@@ -720,8 +720,8 @@ GET /stats/uv/shop/{shopId}?date=2026-06-11
 
 | 方法 | 路径 | 是否需要登录 | 参数 | 说明 | Spot AI 状态 |
 |---|---|---|---|---|---|
-| `POST` | `/user/code` | 否 | Query: `phone` | 发送手机验证码。 | 已实现 |
-| `POST` | `/user/login` | 否 | Body: `phone`, `code` | 手机号验证码登录。 | 已实现 |
+| `POST` | `/user/code` | 否 | Query: `email` | 发送邮箱验证码。 | 已实现 |
+| `POST` | `/user/login` | 否 | Body: `email`, `code` | 邮箱验证码登录。 | 已实现 |
 | `POST` | `/user/logout` | 是 | 无 | 退出登录；参考项目中为 TODO。 | 未实现 |
 | `GET` | `/user/me` | 是 | 无 | 获取当前登录用户。 | 已实现 |
 | `GET` | `/user/info/{id}` | 否/可选 | Path: `id` | 查询用户详细资料。 | 未实现 |

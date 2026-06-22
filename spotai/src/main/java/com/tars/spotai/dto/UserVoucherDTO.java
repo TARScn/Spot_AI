@@ -7,22 +7,19 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-public class BlogViewDTO {
+public class UserVoucherDTO {
     @JsonSerialize(using = ToStringSerializer.class)
-    private Long id;
+    private Long orderId;
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long voucherId;
     @JsonSerialize(using = ToStringSerializer.class)
     private Long shopId;
-    @JsonSerialize(using = ToStringSerializer.class)
-    private Long userId;
+    private String shopName;
     private String title;
-    private String images;
-    private String content;
-    private Integer liked;
-    private Integer comments;
-    private Boolean isLike;
-    private Boolean isFollow;
-    private String name;
-    private String icon;
+    private String subTitle;
+    private Long payValue;
+    private Long actualValue;
+    private Integer type;
+    private Integer status;
     private LocalDateTime createTime;
-    private LocalDateTime updateTime;
 }
