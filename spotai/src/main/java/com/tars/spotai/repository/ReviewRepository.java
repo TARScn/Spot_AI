@@ -67,6 +67,32 @@ public class ReviewRepository {
         return count == null ? 0 : count;
     }
 
+    public int countActiveWithContentByShopId(Long shopId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(1) from tb_review where shop_id = ? and status = 0 and content is not null and trim(content) <> ''",
+                Integer.class,
+                shopId
+        );
+        return count == null ? 0 : count;
+    }
+
+    public List<Review> findActiveWithContentByShopId(Long shopId, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 2000));
+        return jdbcTemplate.query(
+                """
+                        select id, shop_id, user_id, order_id, score, content, status, liked,
+                               images_count, create_time, update_time
+                        from tb_review
+                        where shop_id = ? and status = 0 and content is not null and trim(content) <> ''
+                        order by create_time desc, id desc
+                        limit ?
+                        """,
+                new ReviewRowMapper(),
+                shopId,
+                safeLimit
+        );
+    }
+
     public Map<Long, List<String>> findImagesByReviewIds(List<Long> reviewIds) {
         if (reviewIds == null || reviewIds.isEmpty()) {
             return Map.of();

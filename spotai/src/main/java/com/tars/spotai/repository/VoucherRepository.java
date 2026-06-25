@@ -383,4 +383,41 @@ public class VoucherRepository {
     private static LocalDateTime toLocalDateTime(Timestamp timestamp) {
         return timestamp == null ? null : timestamp.toLocalDateTime();
     }
+
+    public List<Voucher> findActiveByShopId(Long shopId, LocalDateTime now, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 20));
+        List<Voucher> vouchers = new ArrayList<>();
+        for (int shard = 0; shard < 2; shard++) {
+            vouchers.addAll(jdbcTemplate.query(
+                    """
+                            select id, shop_id, title, sub_title, rules, pay_value, actual_value,
+                                   type, status, create_time, update_time
+                            from tb_voucher_%d
+                            where shop_id = ? and status = 1
+                            order by create_time desc
+                            limit ?
+                            """.formatted(shard),
+                    (rs, rowNum) -> {
+                        Voucher voucher = new Voucher();
+                        voucher.setId(rs.getLong("id"));
+                        voucher.setShopId(rs.getLong("shop_id"));
+                        voucher.setTitle(rs.getString("title"));
+                        voucher.setSubTitle(rs.getString("sub_title"));
+                        voucher.setRules(rs.getString("rules"));
+                        voucher.setPayValue(rs.getLong("pay_value"));
+                        voucher.setActualValue(rs.getLong("actual_value"));
+                        voucher.setType(rs.getInt("type"));
+                        voucher.setStatus(rs.getInt("status"));
+                        voucher.setCreateTime(rs.getTimestamp("create_time") == null ? null
+                                : rs.getTimestamp("create_time").toLocalDateTime());
+                        voucher.setUpdateTime(rs.getTimestamp("update_time") == null ? null
+                                : rs.getTimestamp("update_time").toLocalDateTime());
+                        return voucher;
+                    },
+                    shopId,
+                    safeLimit
+            ));
+        }
+        return vouchers;
+    }
 }

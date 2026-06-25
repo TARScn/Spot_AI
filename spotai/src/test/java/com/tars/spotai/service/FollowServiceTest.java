@@ -36,13 +36,15 @@ class FollowServiceTest {
     @Mock
     private StringRedisTemplate stringRedisTemplate;
     @Mock
+    private FeedService feedService;
+    @Mock
     private SetOperations<String, String> setOperations;
 
     private FollowService followService;
 
     @BeforeEach
     void setUp() {
-        followService = new FollowService(followRepository, userRepository, redisIdWorker, stringRedisTemplate);
+        followService = new FollowService(followRepository, userRepository, redisIdWorker, stringRedisTemplate, feedService);
     }
 
     @AfterEach

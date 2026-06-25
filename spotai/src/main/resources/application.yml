@@ -37,6 +37,22 @@ spring:
       database: ${REDIS_DATABASE:0}
       password: ${REDIS_PASSWORD}
       timeout: 3s
+  ai:
+    model:
+      chat: openai
+      embedding: dashscope
+    openai:
+      api-key: ${DEEPSEEK_API_KEY:not-configured}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+          temperature: 0.2
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:not-configured}
+      embedding:
+        options:
+          model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v3}
 
 rocketmq:
   name-server: ${ROCKETMQ_NAME_SERVER:localhost:9876}
@@ -59,3 +75,20 @@ spotai:
     bucket: spotai
     blog-prefix: blog
     public-read: true
+  ai:
+    review-summary:
+      enabled: ${SPOTAI_AI_ENABLED:false}
+      top-k: ${REVIEW_AI_TOP_K:20}
+      similarity-threshold: ${REVIEW_AI_SIMILARITY_THRESHOLD:0.2}
+      min-review-count: ${REVIEW_AI_MIN_REVIEW_COUNT:3}
+      cache-ttl-minutes: ${REVIEW_AI_CACHE_TTL_MINUTES:60}
+      max-index-reviews: ${REVIEW_AI_MAX_INDEX_REVIEWS:500}
+      embedding-model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v3}
+      index-name: review_vector_idx
+      key-prefix: "review:vector:"
+      admin-key: ${REVIEW_AI_ADMIN_KEY:}
+      vector-redis:
+        host: ${VECTOR_REDIS_HOST:localhost}
+        port: ${VECTOR_REDIS_PORT:6380}
+        password: ${VECTOR_REDIS_PASSWORD:${REDIS_PASSWORD:}}
+        timeout-millis: ${VECTOR_REDIS_TIMEOUT_MILLIS:3000}

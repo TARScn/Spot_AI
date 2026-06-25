@@ -89,6 +89,7 @@ class VoucherServiceTest {
         UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
         when(voucherRepository.findVoucherById(2001L)).thenReturn(seckillVoucherBase());
         when(voucherRepository.findSeckillVoucherByVoucherId(2001L)).thenReturn(activeSeckillVoucher());
+        when(stringRedisTemplate.hasKey("seckill:stock:2001")).thenReturn(true);
         when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001"))).thenReturn(0L);
         when(redisIdWorker.nextId("voucher_order")).thenReturn(9001L);
 
@@ -104,6 +105,7 @@ class VoucherServiceTest {
         UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
         when(voucherRepository.findVoucherById(2001L)).thenReturn(seckillVoucherBase());
         when(voucherRepository.findSeckillVoucherByVoucherId(2001L)).thenReturn(activeSeckillVoucher());
+        when(stringRedisTemplate.hasKey("seckill:stock:2001")).thenReturn(true);
         when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001")))
                 .thenReturn(0L)
                 .thenReturn(0L);

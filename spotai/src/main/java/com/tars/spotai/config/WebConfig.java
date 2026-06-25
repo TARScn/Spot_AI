@@ -13,7 +13,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * The refresh-token interceptor runs first (order 0), followed by the login interceptor (order 1).
  */
 @Configuration
-@EnableConfigurationProperties({AuthProperties.class, VoucherProperties.class, MinioProperties.class})
+@EnableConfigurationProperties({AuthProperties.class, VoucherProperties.class, MinioProperties.class, ReviewAiProperties.class})
 public class WebConfig implements WebMvcConfigurer {
     /* 1. 拦截器注入 */
     private final RefreshTokenInterceptor refreshTokenInterceptor;
@@ -40,6 +40,8 @@ public class WebConfig implements WebMvcConfigurer {
                         "/blog/hot",
                         "/blog/of/shop",
                         "/review/of/shop",
+                        "/review/summary",
+                        "/ai/chat",
                         "/stats/uv/**",
                         "/error",
                         "/favicon.ico",

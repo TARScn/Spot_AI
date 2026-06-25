@@ -45,4 +45,12 @@ public final class ShardUtils {
     public static String voucherReconcileLogTable(Long orderId) {
         return "tb_voucher_reconcile_log_" + idShard(orderId);
     }
+
+    public static String aiConversationTable(Long userId) {
+        return "tb_ai_conversation_" + idShard(userId);
+    }
+
+    public static String aiUserMemoryTable(Long userId) {
+        return "tb_ai_user_memory_" + idShard(userId);
+    }
 }

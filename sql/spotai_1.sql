@@ -863,6 +863,8 @@ CREATE TABLE `tb_review_embedding` (
                                        `vector_store` varchar(64) NOT NULL COMMENT 'pgvector, milvus, es_vector',
                                        `embedding_id` varchar(128) DEFAULT NULL COMMENT 'external vector id',
                                        `embedding_model` varchar(100) DEFAULT NULL COMMENT 'embedding model',
+                                       `embedding_json` json DEFAULT NULL COMMENT 'persisted embedding vector',
+                                       `redis_indexed` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '0 pending, 1 indexed',
                                        `token_count` int unsigned DEFAULT NULL COMMENT 'token count',
                                        `status` tinyint unsigned NOT NULL DEFAULT '1' COMMENT '1 active, 2 deleted',
                                        `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
@@ -952,6 +954,44 @@ CREATE TABLE `tb_ai_tool_call_log_1` (
                                          KEY `idx_tool_name` (`tool_name`) USING BTREE,
                                          KEY `idx_confirm_token` (`confirm_token`) USING BTREE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='用户邮箱表';
+
+DROP TABLE IF EXISTS `tb_ai_user_memory_0`;
+CREATE TABLE `tb_ai_user_memory_0` (
+                                       `id` bigint NOT NULL COMMENT 'primary key',
+                                       `user_id` bigint unsigned NOT NULL COMMENT 'user id',
+                                       `memory_key` varchar(128) NOT NULL COMMENT 'memory key',
+                                       `memory_type` varchar(32) NOT NULL COMMENT 'preference, avoid, profile',
+                                       `memory_json` json NOT NULL COMMENT 'structured memory value',
+                                       `confidence` decimal(5,4) NOT NULL DEFAULT '0.8000' COMMENT 'memory confidence',
+                                       `source_message_id` bigint DEFAULT NULL COMMENT 'source ai conversation id',
+                                       `source_agent` varchar(64) NOT NULL DEFAULT 'PreferenceExtractorAgent' COMMENT 'source agent name',
+                                       `status` tinyint unsigned NOT NULL DEFAULT '1' COMMENT '1 active, 2 deleted',
+                                       `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+                                       `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+                                       PRIMARY KEY (`id`) USING BTREE,
+                                       UNIQUE KEY `uk_user_memory_key` (`user_id`,`memory_key`) USING BTREE,
+                                       KEY `idx_user_type` (`user_id`,`memory_type`) USING BTREE,
+                                       KEY `idx_source_message` (`source_message_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI 用户长期记忆表';
+
+DROP TABLE IF EXISTS `tb_ai_user_memory_1`;
+CREATE TABLE `tb_ai_user_memory_1` (
+                                       `id` bigint NOT NULL COMMENT 'primary key',
+                                       `user_id` bigint unsigned NOT NULL COMMENT 'user id',
+                                       `memory_key` varchar(128) NOT NULL COMMENT 'memory key',
+                                       `memory_type` varchar(32) NOT NULL COMMENT 'preference, avoid, profile',
+                                       `memory_json` json NOT NULL COMMENT 'structured memory value',
+                                       `confidence` decimal(5,4) NOT NULL DEFAULT '0.8000' COMMENT 'memory confidence',
+                                       `source_message_id` bigint DEFAULT NULL COMMENT 'source ai conversation id',
+                                       `source_agent` varchar(64) NOT NULL DEFAULT 'PreferenceExtractorAgent' COMMENT 'source agent name',
+                                       `status` tinyint unsigned NOT NULL DEFAULT '1' COMMENT '1 active, 2 deleted',
+                                       `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'create time',
+                                       `update_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'update time',
+                                       PRIMARY KEY (`id`) USING BTREE,
+                                       UNIQUE KEY `uk_user_memory_key` (`user_id`,`memory_key`) USING BTREE,
+                                       KEY `idx_user_type` (`user_id`,`memory_type`) USING BTREE,
+                                       KEY `idx_source_message` (`source_message_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='AI 用户长期记忆表';
 
 DROP TABLE IF EXISTS `tb_ai_tool_confirm_0`;
 CREATE TABLE `tb_ai_tool_confirm_0` (

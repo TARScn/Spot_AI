@@ -2,6 +2,7 @@ package com.tars.spotai.service;
 
 import com.tars.spotai.dto.ScrollResultDTO;
 import com.tars.spotai.repository.FollowRepository;
+import com.tars.spotai.repository.BlogRepository;
 import com.tars.spotai.utils.RedisConstants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,8 @@ class FeedServiceTest {
     @Mock
     private FollowRepository followRepository;
     @Mock
+    private BlogRepository blogRepository;
+    @Mock
     private StringRedisTemplate stringRedisTemplate;
     @Mock
     private ZSetOperations<String, String> zSetOperations;
@@ -35,7 +38,7 @@ class FeedServiceTest {
 
     @BeforeEach
     void setUp() {
-        feedService = new FeedService(followRepository, stringRedisTemplate);
+        feedService = new FeedService(followRepository, blogRepository, stringRedisTemplate);
     }
 
     @Test

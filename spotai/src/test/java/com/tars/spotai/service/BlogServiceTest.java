@@ -7,6 +7,7 @@ import com.tars.spotai.entity.Blog;
 import com.tars.spotai.entity.Shop;
 import com.tars.spotai.entity.User;
 import com.tars.spotai.repository.BlogRepository;
+import com.tars.spotai.repository.FollowRepository;
 import com.tars.spotai.repository.ShopRepository;
 import com.tars.spotai.repository.UserRepository;
 import com.tars.spotai.utils.RedisConstants;
@@ -43,6 +44,8 @@ class BlogServiceTest {
     @Mock
     private ShopRepository shopRepository;
     @Mock
+    private FollowRepository followRepository;
+    @Mock
     private RedisIdWorker redisIdWorker;
     @Mock
     private StringRedisTemplate stringRedisTemplate;
@@ -55,7 +58,7 @@ class BlogServiceTest {
 
     @BeforeEach
     void setUp() {
-        blogService = new BlogService(blogRepository, userRepository, shopRepository, redisIdWorker, stringRedisTemplate, feedService);
+        blogService = new BlogService(blogRepository, userRepository, shopRepository, followRepository, redisIdWorker, stringRedisTemplate, feedService);
     }
 
     @AfterEach
@@ -96,7 +99,7 @@ class BlogServiceTest {
     void likeBlogAddsLikeWhenRedisScriptReturnsPositiveAction() {
         UserHolder.saveUser(new UserDTO(1001L, "alice", ""));
         when(blogRepository.findById(9001L)).thenReturn(blog(9001L, 1002L));
-        when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001"), any()))
+        when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001"), any(), eq("9001")))
                 .thenReturn(1L);
         when(blogRepository.increaseLiked(9001L)).thenReturn(1);
 

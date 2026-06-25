@@ -139,6 +139,8 @@ function App() {
   const [reviewPage, setReviewPage] = useState(1)
   const [reviewHasMore, setReviewHasMore] = useState(false)
   const [reviewLoading, setReviewLoading] = useState(false)
+  const [reviewSummary, setReviewSummary] = useState(null)
+  const [reviewSummaryLoading, setReviewSummaryLoading] = useState(false)
   const [shopDetailLoading, setShopDetailLoading] = useState(false)
   const [blogs, setBlogs] = useState([])
   const [feed, setFeed] = useState([])
@@ -167,6 +169,16 @@ function App() {
   const [voucherActivities, setVoucherActivities] = useState([])
   const [voucherLoading, setVoucherLoading] = useState(false)
   const [voucherBusyId, setVoucherBusyId] = useState(null)
+  const [aiChatOpen, setAiChatOpen] = useState(false)
+  const [aiChatInput, setAiChatInput] = useState('')
+  const [aiChatMessages, setAiChatMessages] = useState([
+    {
+      role: 'assistant',
+      content: '你好，我是 Spot AI 助手。可以帮你理解店铺、评价和优惠信息。',
+      generatedAt: new Date().toISOString()
+    }
+  ])
+  const [aiChatLoading, setAiChatLoading] = useState(false)
 
   const loggedIn = Boolean(user)
 
@@ -330,6 +342,7 @@ function App() {
     const summary = typeof shopOrId === 'object' ? shopOrId : null
     const id = summary?.id || shopOrId
     setShopDetailLoading(true)
+    setReviewSummary(null)
     if (summary) {
       setSelectedShop(summary)
     }
@@ -344,8 +357,80 @@ function App() {
     } else {
       setToast(body.errorMsg || '商户详情加载失败')
     }
-    await loadShopReviews(id, 1, false)
+    await Promise.all([
+      loadShopReviews(id, 1, false),
+      loadReviewSummary(id)
+    ])
     setShopDetailLoading(false)
+  }
+
+  async function loadReviewSummary(shopId) {
+    setReviewSummaryLoading(true)
+    const body = await api(`/review/summary?${new URLSearchParams({ shopId: String(shopId) })}`)
+    setReviewSummaryLoading(false)
+    if (body.success && body.data) {
+      setReviewSummary(body.data)
+      return
+    }
+    setReviewSummary({
+      status: 'UNAVAILABLE',
+      message: body.errorMsg || 'AI 总结暂不可用'
+    })
+  }
+
+  async function sendAiChatMessage(event) {
+    event?.preventDefault()
+    const message = aiChatInput.trim()
+    if (!message || aiChatLoading) return
+
+    const userMessage = {
+      role: 'user',
+      content: message,
+      generatedAt: new Date().toISOString()
+    }
+    const nextMessages = [...aiChatMessages, userMessage]
+    setAiChatMessages(nextMessages)
+    setAiChatInput('')
+    setAiChatLoading(true)
+
+    const history = aiChatMessages
+      .slice(-8)
+      .map(({ role, content }) => ({ role, content }))
+
+    const body = await api('/ai/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        route: 'CHAT',
+        shopId: selectedShop?.id || null,
+        message,
+        history
+      })
+    })
+
+    setAiChatLoading(false)
+    if (body.success && body.data?.answer) {
+      setAiChatMessages((items) => [
+        ...items,
+        {
+          role: 'assistant',
+          content: body.data.answer,
+          generatedAt: body.data.generatedAt,
+          agentRoute: body.data.agentRoute,
+          memoryUpdated: Boolean(body.data.memoryUpdated),
+          memories: Array.isArray(body.data.memories) ? body.data.memories : []
+        }
+      ])
+      return
+    }
+    setAiChatMessages((items) => [
+      ...items,
+      {
+        role: 'assistant',
+        content: body.errorMsg || 'AI 助手暂不可用，请稍后再试。',
+        generatedAt: new Date().toISOString(),
+        error: true
+      }
+    ])
   }
 
   async function loadShopReviews(shopId, page = 1, append = false) {
@@ -750,8 +835,10 @@ function App() {
           <ShopDetailPage
             shop={selectedShop}
             reviews={shopReviews}
+            reviewSummary={reviewSummary}
             loading={shopDetailLoading}
             reviewLoading={reviewLoading}
+            reviewSummaryLoading={reviewSummaryLoading}
             reviewHasMore={reviewHasMore}
             onBack={() => setActiveTab('shops')}
             onLoadMoreReviews={() => selectedShop && loadShopReviews(selectedShop.id, reviewPage + 1, true)}
@@ -866,8 +953,126 @@ function App() {
           <button onClick={() => setToast('')} aria-label="关闭提示">关闭</button>
         </div>
       )}
+
+      <AiChatWidget
+        open={aiChatOpen}
+        onToggle={() => setAiChatOpen((value) => !value)}
+        messages={aiChatMessages}
+        input={aiChatInput}
+        setInput={setAiChatInput}
+        loading={aiChatLoading}
+        selectedShop={selectedShop}
+        onSubmit={sendAiChatMessage}
+      />
     </div>
   )
+}
+
+function AiChatWidget({ open, onToggle, messages, input, setInput, loading, selectedShop, onSubmit }) {
+  return (
+    <aside className={open ? 'ai-chat-widget open' : 'ai-chat-widget'} aria-label="Spot AI 对话助手">
+      {open && (
+        <section className="ai-chat-panel" aria-labelledby="ai-chat-title">
+          <header className="ai-chat-header">
+            <div>
+              <p className="eyebrow">Spot AI</p>
+              <h2 id="ai-chat-title">本地生活助手</h2>
+            </div>
+            <button type="button" className="ai-chat-icon-button" onClick={onToggle} aria-label="收起 AI 对话">
+              ×
+            </button>
+          </header>
+          <div className="ai-chat-context">
+            {selectedShop?.name ? `当前店铺：${selectedShop.name}` : '可咨询店铺、评价、优惠和探店内容'}
+          </div>
+          <div className="ai-chat-messages" role="log" aria-live="polite" aria-relevant="additions">
+            {messages.map((message, index) => (
+              <article
+                key={`${message.role}-${index}-${message.generatedAt || ''}`}
+                className={`ai-chat-message ${message.role === 'user' ? 'user' : 'assistant'} ${message.error ? 'error' : ''}`}
+              >
+                <span>{message.role === 'user' ? '你' : 'AI'}</span>
+                <p>{message.content}</p>
+                {message.role !== 'user' && (message.agentRoute || message.memoryUpdated) && (
+                  <div className="ai-chat-meta">
+                    {message.agentRoute && <small>{agentRouteText(message.agentRoute)}</small>}
+                    {message.memoryUpdated && <small>已更新偏好</small>}
+                  </div>
+                )}
+                {message.role !== 'user' && Array.isArray(message.memories) && message.memories.length > 0 && (
+                  <div className="ai-memory-tags" aria-label="本轮更新的偏好记忆">
+                    {message.memories.slice(0, 3).map((memory) => (
+                      <small key={`${memory.memoryKey}-${memory.summary}`}>
+                        {memoryLabel(memory.memoryKey)}
+                      </small>
+                    ))}
+                  </div>
+                )}
+              </article>
+            ))}
+            {loading && (
+              <article className="ai-chat-message assistant" aria-label="AI 正在回复">
+                <span>AI</span>
+                <p>正在思考...</p>
+              </article>
+            )}
+          </div>
+          <form className="ai-chat-form" onSubmit={onSubmit}>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              maxLength={1000}
+              rows={2}
+              placeholder="问问这家店适合什么场景..."
+              aria-label="输入 AI 对话内容"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  onSubmit(event)
+                }
+              }}
+            />
+            <button type="submit" className="primary" disabled={loading || !input.trim()}>
+              {loading ? '发送中' : '发送'}
+            </button>
+          </form>
+        </section>
+      )}
+      <button
+        type="button"
+        className="ai-chat-fab"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={open ? '收起 AI 对话' : '打开 AI 对话'}
+      >
+        AI
+      </button>
+    </aside>
+  )
+}
+
+function agentRouteText(route) {
+  const labels = {
+    SHOP_GUIDE: '找店 Agent',
+    REVIEW_RAG: '评价 RAG Agent',
+    COUPON: '优惠 Agent',
+    ORDER_GUARD: '订单守护 Agent',
+    CHAT: '对话 Agent'
+  }
+  return labels[route] || 'Spot AI Agent'
+}
+
+function memoryLabel(memoryKey) {
+  const labels = {
+    'dining.preference.taste': '口味偏好',
+    'dining.preference.environment': '环境偏好',
+    'dining.preference.budget': '预算偏好',
+    'dining.preference.area': '区域偏好',
+    'dining.preference.scene': '场景偏好',
+    'dining.preference.discount': '优惠偏好',
+    'dining.avoid.keyword': '避雷偏好'
+  }
+  return labels[memoryKey] || '偏好'
 }
 
 function HomePage({ user, categories, shops, blogs, signDays, onCategory, onOpenShop, onSign, onLogin }) {
@@ -1015,7 +1220,17 @@ function ShopPage({ categories, typeId, setTypeId, shops, loading, selectedShop,
   )
 }
 
-function ShopDetailPage({ shop, reviews, loading, reviewLoading, reviewHasMore, onBack, onLoadMoreReviews }) {
+function ShopDetailPage({
+  shop,
+  reviews,
+  reviewSummary,
+  loading,
+  reviewLoading,
+  reviewSummaryLoading,
+  reviewHasMore,
+  onBack,
+  onLoadMoreReviews
+}) {
   if (loading && !shop) {
     return <SkeletonList />
   }
@@ -1056,6 +1271,8 @@ function ShopDetailPage({ shop, reviews, loading, reviewLoading, reviewHasMore, 
         <ShopInfoItem label="营业时间" value={hoursText(shop.openHours)} multiline />
         <ShopInfoItem label="距西电北校区" value={distanceText(shop.distance)} />
       </section>
+
+      <ReviewAiSummary summary={reviewSummary} loading={reviewSummaryLoading} />
 
       <section className="detail-metric-grid">
         <Metric title="人均消费" value={money(shop.avgPrice)} action="详情" onAction={() => {}} />
@@ -1160,6 +1377,65 @@ function BlogPage({
         />
       )}
     </div>
+  )
+}
+
+function ReviewAiSummary({ summary, loading }) {
+  if (loading) {
+    return (
+      <section className="ai-review-summary" aria-busy="true" aria-label="正在生成评价总结">
+        <div className="ai-summary-heading">
+          <p className="eyebrow">AI 评论摘要</p>
+          <h2>正在分析近期评价...</h2>
+        </div>
+        <div className="ai-summary-skeleton" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+      </section>
+    )
+  }
+
+  if (!summary || summary.status !== 'READY') {
+    return (
+      <section className="ai-review-summary ai-summary-empty" role="status">
+        <div className="ai-summary-heading">
+          <p className="eyebrow">AI 评论摘要</p>
+          <h2>店铺评价概览</h2>
+        </div>
+        <p>{summary?.message || '当前暂无可用的评价总结'}</p>
+      </section>
+    )
+  }
+
+  const groups = [
+    { title: '大家认可', items: summary.highlights || [], tone: 'positive' },
+    { title: '需要留意', items: summary.weaknesses || [], tone: 'caution' },
+    { title: '适合场景', items: summary.scenes || [], tone: 'neutral' }
+  ].filter((group) => group.items.length > 0)
+
+  return (
+    <section className="ai-review-summary" aria-labelledby="ai-review-summary-title">
+      <div className="ai-summary-heading">
+        <div>
+          <p className="eyebrow">AI 评论摘要</p>
+          <h2 id="ai-review-summary-title">大家怎么评价这家店</h2>
+        </div>
+        <span>{summary.reviewCount || 0} 条评价 · {timeText(summary.generatedAt)}</span>
+      </div>
+      <p className="ai-summary-copy">{summary.summary}</p>
+      <div className="ai-summary-groups">
+        {groups.map((group) => (
+          <section key={group.title} className={`ai-summary-group ${group.tone}`}>
+            <h3>{group.title}</h3>
+            <div className="ai-summary-tags">
+              {group.items.map((item) => <span key={item}>{item}</span>)}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
   )
 }
 
