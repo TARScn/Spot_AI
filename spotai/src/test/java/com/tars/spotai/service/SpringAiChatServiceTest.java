@@ -9,6 +9,8 @@ import com.tars.spotai.repository.AiConversationRepository;
 import com.tars.spotai.repository.AiUserMemoryRepository;
 import com.tars.spotai.utils.RedisIdWorker;
 import com.tars.spotai.utils.UserHolder;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.tool.annotation.Tool;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -104,6 +106,7 @@ class SpringAiChatServiceTest {
         private final PreferenceExtractorAgent preferenceExtractorAgent = mock(PreferenceExtractorAgent.class);
         private final ShopGuideAgent shopGuideAgent = mock(ShopGuideAgent.class);
         private final CouponAgent couponAgent = mock(CouponAgent.class);
+        private final SpotAiChatTools spotAiChatTools = mock(SpotAiChatTools.class);
         private final RedisIdWorker redisIdWorker = mock(RedisIdWorker.class);
         @SuppressWarnings("unchecked")
         private final ObjectProvider<ReviewSummaryService> reviewSummaryServiceProvider = mock(ObjectProvider.class);
@@ -115,6 +118,11 @@ class SpringAiChatServiceTest {
             when(preferenceExtractorAgent.extract(anyLong(), any(), any())).thenReturn(List.of());
             when(shopGuideAgent.buildContext(anyLong())).thenReturn("");
             when(couponAgent.buildContext(anyLong())).thenReturn("");
+            when(spotAiChatTools.searchShop(any())).thenReturn("[]");
+            when(spotAiChatTools.queryShopDetail(anyLong())).thenReturn("{}");
+            when(spotAiChatTools.queryReviewSummary(anyLong())).thenReturn("{}");
+            when(spotAiChatTools.queryCoupons(anyLong())).thenReturn("[]");
+            when(spotAiChatTools.recommendShops(anyLong(), any())).thenReturn("[]");
         }
 
         private SpringAiChatService service() {
@@ -125,6 +133,7 @@ class SpringAiChatServiceTest {
                     preferenceExtractorAgent,
                     shopGuideAgent,
                     couponAgent,
+                    spotAiChatTools,
                     redisIdWorker,
                     reviewSummaryServiceProvider,
                     new ObjectMapper(),

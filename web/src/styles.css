@@ -865,11 +865,32 @@ main {
   overflow-wrap: anywhere;
 }
 
+.ai-chat-message .ai-markdown {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #eadfd3;
+  border-radius: 8px;
+  background: #fff;
+  color: #3f2d24;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-chat-message.user .ai-markdown {
+  border-color: #ffb38c;
+  background: #ff6b35;
+  color: #fff;
+}
+
+
 .ai-chat-message.user p {
   border-color: #ffb38c;
   background: #ff6b35;
   color: #fff;
 }
+
 
 .ai-chat-message.error p {
   border-color: #e7b276;
@@ -902,7 +923,6 @@ main {
 
 .ai-chat-meta small {
   padding: 4px 7px;
-  border: 1px solid #eadfd3;
   background: #fffdfa;
   color: #80685b;
 }
@@ -1900,9 +1920,10 @@ main {
 
 .toast {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 30;
+  left: 50%;
+  bottom: 90px;
+  transform: translateX(-50%);
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2143,4 +2164,65 @@ main {
   .ai-chat-form button {
     width: 100%;
   }
+}
+
+.ai-chat-message .ai-markdown p:first-child,
+.ai-chat-message .ai-markdown ul:first-child,
+.ai-chat-message .ai-markdown ol:first-child {
+  margin-top: 0;
+}
+.ai-chat-message .ai-markdown p:last-child,
+.ai-chat-message .ai-markdown ul:last-child,
+.ai-chat-message .ai-markdown ol:last-child {
+  margin-bottom: 0;
+}
+.ai-chat-message .ai-markdown p {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 4px 0;
+  white-space: normal;
+}
+.ai-chat-message .ai-markdown ul,
+.ai-chat-message .ai-markdown ol {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+.ai-chat-message .ai-markdown li {
+  margin-bottom: 2px;
+}
+.ai-chat-message .ai-markdown pre {
+  background: #f2ede8;
+  border-radius: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 13px;
+  margin: 6px 0;
+}
+.ai-chat-message .ai-markdown code {
+  font-size: 13px;
+  background: none;
+  padding: 1px 4px;
+}
+.ai-chat-message .ai-markdown pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+.ai-chat-message .ai-markdown strong {
+  font-weight: 850;
+}
+.ai-chat-message .ai-markdown blockquote {
+  border-left: 3px solid #d8cfc5;
+  margin: 6px 0;
+  padding: 0 0 0 12px;
+  color: #80685b;
+}
+.ai-chat-message .ai-markdown h1,
+.ai-chat-message .ai-markdown h2,
+.ai-chat-message .ai-markdown h3,
+.ai-chat-message .ai-markdown h4 {
+  margin: 8px 0 4px;
+  font-weight: 850;
+  color: #251a16;
 }

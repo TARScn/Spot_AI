@@ -60,6 +60,8 @@ spotai/local-secrets.properties
 # Dependency directories
 node_modules/
 web/dist/
+web/.npmrc
 
 # scripts
 scripts/
+

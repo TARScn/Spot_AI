@@ -1,5 +1,6 @@
-﻿import React, { useEffect, useMemo, useState } from 'react'
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { marked } from 'marked'
 import './styles.css'
 
 const tokenKey = 'spotai_token'
@@ -954,7 +955,8 @@ function App() {
         </div>
       )}
 
-      <AiChatWidget
+     <AiChatWidget
+        activeTab={activeTab}
         open={aiChatOpen}
         onToggle={() => setAiChatOpen((value) => !value)}
         messages={aiChatMessages}
@@ -968,7 +970,15 @@ function App() {
   )
 }
 
-function AiChatWidget({ open, onToggle, messages, input, setInput, loading, selectedShop, onSubmit }) {
+function AiChatWidget({ activeTab, open, onToggle, messages, input, setInput, loading, selectedShop, onSubmit }) {
+  const messageListRef = useRef(null)
+
+  useEffect(() => {
+    if (messageListRef.current) {
+      messageListRef.current.scrollTop = messageListRef.current.scrollHeight
+    }
+  }, [messages])
+
   return (
     <aside className={open ? 'ai-chat-widget open' : 'ai-chat-widget'} aria-label="Spot AI 对话助手">
       {open && (
@@ -983,19 +993,19 @@ function AiChatWidget({ open, onToggle, messages, input, setInput, loading, sele
             </button>
           </header>
           <div className="ai-chat-context">
-            {selectedShop?.name ? `当前店铺：${selectedShop.name}` : '可咨询店铺、评价、优惠和探店内容'}
+            {activeTab === 'shopDetail' && selectedShop?.name ? `当前店铺：${selectedShop.name}` : '当前店铺：无'}
           </div>
-          <div className="ai-chat-messages" role="log" aria-live="polite" aria-relevant="additions">
+          <div className="ai-chat-messages" role="log" aria-live="polite" aria-relevant="additions" ref={messageListRef}>
             {messages.map((message, index) => (
               <article
                 key={`${message.role}-${index}-${message.generatedAt || ''}`}
                 className={`ai-chat-message ${message.role === 'user' ? 'user' : 'assistant'} ${message.error ? 'error' : ''}`}
               >
                 <span>{message.role === 'user' ? '你' : 'AI'}</span>
-                <p>{message.content}</p>
+                {message.role === 'user' ? <p>{message.content}</p> : <AiMarkdown content={message.content} />}
                 {message.role !== 'user' && (message.agentRoute || message.memoryUpdated) && (
                   <div className="ai-chat-meta">
-                    {message.agentRoute && <small>{agentRouteText(message.agentRoute)}</small>}
+                    {agentRouteText(message.agentRoute) && <small>{agentRouteText(message.agentRoute)}</small>}
                     {message.memoryUpdated && <small>已更新偏好</small>}
                   </div>
                 )}
@@ -1013,7 +1023,7 @@ function AiChatWidget({ open, onToggle, messages, input, setInput, loading, sele
             {loading && (
               <article className="ai-chat-message assistant" aria-label="AI 正在回复">
                 <span>AI</span>
-                <p>正在思考...</p>
+                <div className="ai-markdown"><p>正在思考...</p></div>
               </article>
             )}
           </div>
@@ -1053,11 +1063,10 @@ function AiChatWidget({ open, onToggle, messages, input, setInput, loading, sele
 
 function agentRouteText(route) {
   const labels = {
-    SHOP_GUIDE: '找店 Agent',
-    REVIEW_RAG: '评价 RAG Agent',
-    COUPON: '优惠 Agent',
-    ORDER_GUARD: '订单守护 Agent',
-    CHAT: '对话 Agent'
+    SHOP_GUIDE: '找店',
+    REVIEW_RAG: '评价总结',
+    COUPON: '优惠查询',
+    ORDER_GUARD: '订单守护'
   }
   return labels[route] || 'Spot AI Agent'
 }
@@ -1073,6 +1082,17 @@ function memoryLabel(memoryKey) {
     'dining.avoid.keyword': '避雷偏好'
   }
   return labels[memoryKey] || '偏好'
+}
+
+function AiMarkdown({ content }) {
+  const html = useMemo(() => {
+    if (!content) return ''
+    const raw = marked.parse(content, { breaks: true, gfm: true })
+    return raw
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/on\w+\s*=\s*["\'][^"\']*["\']/gi, '')
+  }, [content])
+  return <div className="ai-markdown" dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 function HomePage({ user, categories, shops, blogs, signDays, onCategory, onOpenShop, onSign, onLogin }) {
