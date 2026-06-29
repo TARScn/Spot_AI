@@ -149,6 +149,58 @@ public class VoucherRepository {
                 .toList();
     }
 
+    public List<VoucherActivityDTO> findAvailableActivitiesByShopId(Long shopId, LocalDateTime now, int limit) {
+        List<VoucherActivityDTO> activities = new ArrayList<>();
+        for (int shard = 0; shard < 2; shard++) {
+            activities.addAll(jdbcTemplate.query(
+                    """
+                            select v.id, v.shop_id, s.name as shop_name, v.title, v.sub_title, v.rules,
+                                   v.pay_value, v.actual_value, v.type, v.status,
+                                   sv.init_stock, sv.stock, sv.begin_time, sv.end_time
+                            from tb_voucher_%d v
+                            left join tb_seckill_voucher_%d sv on sv.voucher_id = v.id
+                            left join tb_shop s on s.id = v.shop_id
+                            where v.status = 1
+                              and v.shop_id = ?
+                              and (
+                                v.type = 0
+                                or (v.type = 1 and sv.end_time >= ?)
+                              )
+                            order by
+                              case
+                                when v.type = 1 and sv.begin_time <= ? and sv.end_time >= ? then 0
+                                when v.type = 0 then 1
+                                when v.type = 1 and sv.begin_time > ? then 2
+                                else 3
+                              end,
+                              sv.begin_time asc,
+                              v.create_time desc
+                            limit ?
+                            """.formatted(shard, shard),
+                    new VoucherActivityRowMapper(),
+                    shopId,
+                    now,
+                    now,
+                    now,
+                    now,
+                    Math.max(1, Math.min(limit, 50))
+            ));
+        }
+        return activities.stream()
+                .sorted((left, right) -> {
+                    int leftRank = shopActivityRank(left, now);
+                    int rightRank = shopActivityRank(right, now);
+                    if (leftRank != rightRank) {
+                        return Integer.compare(leftRank, rightRank);
+                    }
+                    LocalDateTime leftTime = left.getBeginTime() == null ? LocalDateTime.MAX : left.getBeginTime();
+                    LocalDateTime rightTime = right.getBeginTime() == null ? LocalDateTime.MAX : right.getBeginTime();
+                    return leftTime.compareTo(rightTime);
+                })
+                .limit(Math.max(1, Math.min(limit, 50)))
+                .toList();
+    }
+
     public boolean existsOrder(Long userId, Long voucherId) {
         Integer count = jdbcTemplate.queryForObject(
                 """
@@ -360,6 +412,19 @@ public class VoucherRepository {
             }
         }
         return 2;
+    }
+
+    private static int shopActivityRank(VoucherActivityDTO activity, LocalDateTime now) {
+        if (activity.getType() != null && activity.getType() == 1) {
+            if (activity.getBeginTime() != null && activity.getEndTime() != null
+                    && !now.isBefore(activity.getBeginTime()) && !now.isAfter(activity.getEndTime())) {
+                return 0;
+            }
+            if (activity.getBeginTime() != null && now.isBefore(activity.getBeginTime())) {
+                return 2;
+            }
+        }
+        return 1;
     }
 
     private static class SeckillVoucherRowMapper implements RowMapper<SeckillVoucher> {

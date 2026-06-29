@@ -1,34 +1,116 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { marked } from 'marked'
+import {
+  Baby,
+  Coffee,
+  Dumbbell,
+  Film,
+  Flame,
+  Gamepad2,
+  HeartPulse,
+  Hotel,
+  MapPinned,
+  Mic,
+  Scissors,
+  Sparkles,
+  Store,
+  Utensils,
+  Wine
+} from 'lucide-react'
+import {
+  businesses as mockBusinesses,
+  categories as mockCategories,
+  cityOptions,
+  districts,
+  filters,
+  rankings
+} from './mockLocalLifeData'
 import './styles.css'
 
 const tokenKey = 'spotai_token'
-const visitorKey = 'spotai_visitor'
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const userLocation = {
-  address: '西安电子科技大学北校区',
-  x: '108.916860',
-  y: '34.229210'
+const userLocation = { x: '108.916860', y: '34.229210' }
+
+const categoryIconMap = {
+  food: Utensils,
+  hotpot: Flame,
+  bbq: Flame,
+  tea: Coffee,
+  coffee: Coffee,
+  hotel: Hotel,
+  movie: Film,
+  ktv: Mic,
+  fun: Gamepad2,
+  beauty: Sparkles,
+  hair: Scissors,
+  spa: HeartPulse,
+  massage: HeartPulse,
+  family: Baby,
+  travel: MapPinned,
+  sport: Dumbbell,
+  bar: Wine,
+  party: Gamepad2,
+  default: Store
 }
 
-function ensureVisitor() {
-  let visitor = localStorage.getItem(visitorKey)
-  if (!visitor) {
-    visitor = `visitor:${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`
-    localStorage.setItem(visitorKey, visitor)
-  }
-  return visitor
+function categoryIconKey(name = '') {
+  const value = repairText(name).toLowerCase()
+  if (value.includes('ktv') || value.includes('k歌')) return 'ktv'
+  if (value.includes('火锅')) return 'hotpot'
+  if (value.includes('烧烤') || value.includes('烤肉')) return 'bbq'
+  if (value.includes('奶茶') || value.includes('茶')) return 'tea'
+  if (value.includes('咖啡')) return 'coffee'
+  if (value.includes('酒店') || value.includes('住宿')) return 'hotel'
+  if (value.includes('电影') || value.includes('影院')) return 'movie'
+  if (value.includes('丽人') || value.includes('美甲') || value.includes('美容')) return 'beauty'
+  if (value.includes('美发')) return 'hair'
+  if (value.includes('spa') || value.includes('按摩') || value.includes('足疗')) return 'spa'
+  if (value.includes('亲子')) return 'family'
+  if (value.includes('周边游') || value.includes('旅游')) return 'travel'
+  if (value.includes('健身') || value.includes('运动')) return 'sport'
+  if (value.includes('酒吧')) return 'bar'
+  if (value.includes('轰趴')) return 'party'
+  if (value.includes('休闲') || value.includes('娱乐')) return 'fun'
+  if (value.includes('美食') || value.includes('餐')) return 'food'
+  return 'default'
+}
+
+const navItems = [
+  { id: 'home', label: '找店' },
+  { id: 'blogs', label: '探店笔记' },
+  { id: 'deals', label: '秒杀优惠' },
+  { id: 'profile', label: '我的' }
+]
+
+const filterStrategies = {
+  nearby: (items) => [...items].sort((a, b) => a.distance - b.distance),
+  rating: (items) => [...items].sort((a, b) => b.rating - a.rating),
+  distance: (items) => [...items].sort((a, b) => a.distance - b.distance),
+  price: (items) => [...items].sort((a, b) => a.avgPrice - b.avgPrice),
+  sold: (items) => [...items].sort((a, b) => b.sold - a.sold),
+  deal: (items) => [...items].sort((a, b) => b.deals.length - a.deals.length),
+  quality: (items) => [...items].filter((item) => item.rating >= 4.7)
+}
+
+const emptyBlogDraft = {
+  shopId: '',
+  shopName: '',
+  title: '',
+  images: '',
+  content: ''
+}
+
+const emptyReviewDraft = {
+  score: 5,
+  content: '',
+  images: []
 }
 
 async function api(path, options = {}) {
   const token = localStorage.getItem(tokenKey)
   const headers = { ...(options.headers || {}) }
   if (token) headers.Authorization = `Bearer ${token}`
-  if (options.body && !(options.body instanceof FormData)) {
-    headers['Content-Type'] = 'application/json'
-  }
-
+  if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json'
   const response = await fetch(path, { ...options, headers })
   let body
   try {
@@ -36,56 +118,1943 @@ async function api(path, options = {}) {
   } catch {
     body = { success: false, errorMsg: `HTTP ${response.status}` }
   }
-  if (!response.ok && !body.errorMsg) {
-    body.errorMsg = `HTTP ${response.status}`
-  }
+  if (!response.ok && !body.errorMsg) body.errorMsg = `HTTP ${response.status}`
   return body
 }
 
-function money(value) {
-  if (value === null || value === undefined || value === '') return '-'
-  return `¥${Number(value)}`
+function App() {
+  const [activeView, setActiveView] = useState('home')
+  const [city, setCity] = useState('西安')
+  const [query, setQuery] = useState('')
+  const [activeCategory, setActiveCategory] = useState('food')
+  const [categoryOptions, setCategoryOptions] = useState(mockCategories)
+  const [serverBusinesses, setServerBusinesses] = useState([])
+  const [usingServerData, setUsingServerData] = useState(false)
+  const [activeFilter, setActiveFilter] = useState('nearby')
+  const [activeDistrict, setActiveDistrict] = useState('全部')
+  const [selectedBusiness, setSelectedBusiness] = useState(null)
+  const [detailVouchers, setDetailVouchers] = useState([])
+  const [reviewSummary, setReviewSummary] = useState(null)
+  const [reviewSummaryLoading, setReviewSummaryLoading] = useState(false)
+  const [shopReviews, setShopReviews] = useState([])
+  const [reviewPage, setReviewPage] = useState(1)
+  const [reviewHasMore, setReviewHasMore] = useState(false)
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isFiltering, setIsFiltering] = useState(false)
+  const [error, setError] = useState('')
+  const [toast, setToast] = useState('')
+
+  const [blogs, setBlogs] = useState([])
+  const [blogLoading, setBlogLoading] = useState(false)
+  const [blogMode, setBlogMode] = useState('discover')
+  const [blogComposerOpen, setBlogComposerOpen] = useState(false)
+  const [selectedBlog, setSelectedBlog] = useState(null)
+  const [blogDetailLoading, setBlogDetailLoading] = useState(false)
+  const [blogDraft, setBlogDraft] = useState(emptyBlogDraft)
+  const [blogPublishing, setBlogPublishing] = useState(false)
+  const [blogImageUploading, setBlogImageUploading] = useState(false)
+  const [blogShopKeyword, setBlogShopKeyword] = useState('')
+  const [blogShopResults, setBlogShopResults] = useState([])
+  const [blogShopSearching, setBlogShopSearching] = useState(false)
+  const [followFeedCursor, setFollowFeedCursor] = useState({ minTime: 0, offset: 0, hasMore: false })
+
+  const [voucherActivities, setVoucherActivities] = useState([])
+  const [voucherLoading, setVoucherLoading] = useState(false)
+  const [voucherBusyId, setVoucherBusyId] = useState(null)
+
+  const [user, setUser] = useState(null)
+  const [profileData, setProfileData] = useState(null)
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [loginOpen, setLoginOpen] = useState(false)
+  const [email, setEmail] = useState('')
+  const [code, setCode] = useState('')
+  const [countdown, setCountdown] = useState(0)
+  const [authBusy, setAuthBusy] = useState(false)
+  const [reviewDraft, setReviewDraft] = useState(emptyReviewDraft)
+  const [reviewPublishing, setReviewPublishing] = useState(false)
+  const [reviewImageUploading, setReviewImageUploading] = useState(false)
+
+  const [aiChatOpen, setAiChatOpen] = useState(false)
+  const [aiChatInput, setAiChatInput] = useState('')
+  const [aiChatLoading, setAiChatLoading] = useState(false)
+  const [aiChatMessages, setAiChatMessages] = useState([
+    {
+      role: 'assistant',
+      content: '你好，我是 Spot AI 助手。可以帮你找店、比较评价、查询人均和优惠。',
+      generatedAt: new Date().toISOString()
+    }
+  ])
+  const activeDetailIdRef = useRef('')
+
+  useEffect(() => {
+    hydrateBackendData()
+    hydrateUser()
+    loadHotBlogs()
+    loadVoucherActivities()
+  }, [])
+
+  useEffect(() => {
+    if (countdown <= 0) return undefined
+    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000)
+    return () => window.clearTimeout(timer)
+  }, [countdown])
+
+  useEffect(() => {
+    if (!toast) return undefined
+    const timer = window.setTimeout(() => setToast(''), 1800)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  async function hydrateBackendData() {
+    setIsLoading(true)
+    try {
+      const categoryBody = await api('/shop-type/list')
+      if (categoryBody.success && Array.isArray(categoryBody.data) && categoryBody.data.length > 0) {
+        const serverCategories = categoryBody.data.map((item) => ({
+          id: `server:${item.id}`,
+          sourceId: item.id,
+          name: repairText(item.name),
+          iconKey: categoryIconKey(item.name)
+        }))
+        setCategoryOptions(serverCategories)
+        setActiveCategory(serverCategories[0].id)
+        await loadServerShops(serverCategories[0].sourceId)
+      } else {
+        setUsingServerData(false)
+      }
+    } catch {
+      setUsingServerData(false)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  async function hydrateUser() {
+    if (!localStorage.getItem(tokenKey)) return
+    const body = await api('/user/me')
+    if (body.success) {
+      setUser(body.data)
+      loadProfile()
+      loadHotBlogs(true)
+      return
+    }
+    localStorage.removeItem(tokenKey)
+  }
+
+  async function loadProfile() {
+    if (!localStorage.getItem(tokenKey)) return
+    setProfileLoading(true)
+    const body = await api('/user/profile')
+    setProfileLoading(false)
+    if (body.success) {
+      setProfileData(body.data)
+    } else if (body.errorMsg) {
+      setToast(body.errorMsg)
+    }
+  }
+
+  async function sendCode() {
+    if (!email.trim()) {
+      setToast('请输入邮箱')
+      return
+    }
+    setAuthBusy(true)
+    const body = await api(`/user/code?${new URLSearchParams({ email: email.trim() })}`, { method: 'POST' })
+    setAuthBusy(false)
+    if (body.success) {
+      setCountdown(60)
+      setToast('验证码已发送')
+    } else {
+      setToast(body.errorMsg || '验证码发送失败')
+    }
+  }
+
+  async function login(event) {
+    event?.preventDefault()
+    if (!email.trim() || !code.trim()) {
+      setToast('请输入邮箱和验证码')
+      return
+    }
+    setAuthBusy(true)
+    const body = await api('/user/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim(), code: code.trim() })
+    })
+    setAuthBusy(false)
+    if (!body.success) {
+      setToast(body.errorMsg || '登录失败')
+      return
+    }
+    localStorage.setItem(tokenKey, body.data)
+    setLoginOpen(false)
+    setToast('登录成功')
+    hydrateUser()
+  }
+
+  function logout() {
+    localStorage.removeItem(tokenKey)
+    setUser(null)
+    setProfileData(null)
+    setToast('已退出登录')
+  }
+
+  async function loadServerShops(typeId) {
+    const params = new URLSearchParams({
+      typeId: String(typeId),
+      current: '1',
+      x: userLocation.x,
+      y: userLocation.y
+    })
+    const body = await api(`/shop/of/type?${params}`)
+    if (body.success && Array.isArray(body.data)) {
+      setServerBusinesses(body.data.map(normalizeShop))
+      setUsingServerData(true)
+      setError('')
+      return
+    }
+    setUsingServerData(false)
+    setError(body.errorMsg || '')
+  }
+
+  async function searchServerShops(keyword) {
+    const body = await api(`/shop/search?${new URLSearchParams({ keyword })}`)
+    setIsFiltering(false)
+    if (body.success && Array.isArray(body.data)) {
+      setServerBusinesses(body.data.map(normalizeShop))
+      setUsingServerData(true)
+      setActiveCategory('all-server')
+      setError('')
+      setToast(body.data.length > 0 ? `找到 ${body.data.length} 家相关商户` : '没有找到相关商户')
+      return
+    }
+    setError(body.errorMsg || '商户搜索失败')
+  }
+
+  async function openBusinessDetail(businessOrId) {
+    const id = typeof businessOrId === 'object' ? businessOrId.id : Number(businessOrId)
+    const summary = typeof businessOrId === 'object' ? businessOrId : null
+    activeDetailIdRef.current = String(id)
+    if (summary) setSelectedBusiness(summary)
+    setDetailLoading(true)
+    setDetailVouchers([])
+    setReviewSummary(null)
+    setReviewSummaryLoading(true)
+    setShopReviews([])
+    setReviewPage(1)
+    setReviewHasMore(false)
+    setReviewDraft(emptyReviewDraft)
+    try {
+      const [shopBody, voucherBody] = await Promise.all([
+        api(`/shop/${id}`),
+        api(`/voucher/activities/of/shop?${new URLSearchParams({ shopId: String(id) })}`),
+        loadShopReviews(id, 1, true)
+      ])
+      if (activeDetailIdRef.current !== String(id)) return
+      if (shopBody.success && shopBody.data) {
+        const normalized = normalizeShop(shopBody.data)
+        setSelectedBusiness({ ...normalized, distance: summary?.distance ?? normalized.distance })
+      } else if (!summary) {
+        const fallback = mockBusinesses.find((item) => Number(item.id) === id)
+        if (fallback) setSelectedBusiness(fallback)
+      }
+      if (voucherBody.success && Array.isArray(voucherBody.data)) setDetailVouchers(voucherBody.data)
+    } finally {
+      if (activeDetailIdRef.current === String(id)) setDetailLoading(false)
+    }
+    loadReviewSummary(id)
+  }
+
+  async function loadReviewSummary(shopId) {
+    const activeId = String(shopId)
+    setReviewSummaryLoading(true)
+    const body = await api(`/review/summary?${new URLSearchParams({ shopId: activeId })}`)
+    if (activeDetailIdRef.current !== activeId) return
+    if (body.success && body.data) {
+      setReviewSummary(body.data)
+    } else {
+      setReviewSummary({
+        status: 'UNAVAILABLE',
+        message: body.errorMsg || 'AI 评论总结暂不可用'
+      })
+    }
+    setReviewSummaryLoading(false)
+  }
+
+  async function loadShopReviews(shopId, page = 1, replace = false) {
+    if (!shopId || (reviewLoading && !replace)) return
+    const activeId = String(shopId)
+    setReviewLoading(true)
+    const body = await api(`/review/of/shop?${new URLSearchParams({ id: String(shopId), current: String(page) })}`)
+    if (activeDetailIdRef.current !== activeId) return
+    setReviewLoading(false)
+    if (body.success && body.data) {
+      const nextList = Array.isArray(body.data.list) ? body.data.list.map(normalizeReview) : []
+      setShopReviews((items) => replace ? nextList : mergeById(items, nextList))
+      setReviewPage(body.data.current || page)
+      setReviewHasMore(Boolean(body.data.hasMore))
+    } else if (replace) {
+      setShopReviews([])
+      setReviewHasMore(false)
+    }
+  }
+
+  function loadMoreReviews() {
+    if (!selectedBusiness || reviewLoading || !reviewHasMore) return
+    loadShopReviews(selectedBusiness.id, reviewPage + 1, false)
+  }
+
+  async function loadHotBlogs(includeMine = Boolean(localStorage.getItem(tokenKey))) {
+    setBlogLoading(true)
+    const [body, mineBody] = await Promise.all([
+      api('/blog/recent?current=1'),
+      includeMine ? api('/blog/of/me?current=1') : Promise.resolve({ success: true, data: [] })
+    ])
+    setBlogLoading(false)
+    const hotBlogs = body.success && Array.isArray(body.data) ? body.data.map(normalizeBlog) : []
+    const myBlogs = mineBody.success && Array.isArray(mineBody.data) ? mineBody.data.map(normalizeBlog) : []
+    const merged = mergeById(myBlogs, hotBlogs)
+    if (merged.length > 0 || body.success || mineBody.success) {
+      setBlogs(merged)
+    } else {
+      setBlogs([])
+    }
+  }
+
+  async function loadFollowBlogs({ replace = true } = {}) {
+    if (!localStorage.getItem(tokenKey)) {
+      setBlogs([])
+      setFollowFeedCursor({ minTime: 0, offset: 0, hasMore: false })
+      setLoginOpen(true)
+      setToast('登录后查看关注笔记')
+      return
+    }
+    setBlogLoading(true)
+    const params = new URLSearchParams({
+      lastId: String(replace ? 0 : followFeedCursor.minTime || 0),
+      offset: String(replace ? 0 : followFeedCursor.offset || 0)
+    })
+    const body = await api(`/blog/of/follow?${params}`)
+    setBlogLoading(false)
+    if (body.success && body.data) {
+      const list = Array.isArray(body.data.list) ? body.data.list.map(normalizeBlog) : []
+      setBlogs((items) => replace ? list : mergeById(items, list))
+      setFollowFeedCursor({
+        minTime: body.data.minTime || 0,
+        offset: body.data.offset || 0,
+        hasMore: list.length > 0 && Boolean(body.data.minTime)
+      })
+    } else {
+      if (replace) setBlogs([])
+      setFollowFeedCursor({ minTime: 0, offset: 0, hasMore: false })
+      setToast(body.errorMsg || '关注笔记加载失败')
+    }
+  }
+
+  function changeBlogMode(nextMode) {
+    if (nextMode === blogMode) return
+    setBlogMode(nextMode)
+    if (nextMode === 'follow') {
+      loadFollowBlogs({ replace: true })
+      return
+    }
+    loadHotBlogs()
+  }
+
+  function refreshBlogs() {
+    if (blogMode === 'follow') {
+      loadFollowBlogs({ replace: true })
+      return
+    }
+    loadHotBlogs()
+  }
+
+  async function openBlogDetail(blog) {
+    setSelectedBlog(blog)
+    setBlogDetailLoading(true)
+    const body = await api(`/blog/${blog.id}`)
+    setBlogDetailLoading(false)
+    if (body.success && body.data) {
+      setSelectedBlog(normalizeBlog(body.data))
+    } else {
+      setToast(body.errorMsg || '探店笔记加载失败')
+    }
+  }
+
+  async function likeBlog(blogId) {
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能点赞')
+      return
+    }
+    const body = await api(`/blog/like/${blogId}`, { method: 'PUT' })
+    if (body.success) {
+      setToast('已更新点赞')
+      refreshBlogs()
+    } else {
+      setToast(body.errorMsg || '点赞失败')
+    }
+  }
+
+  async function toggleFollowBlogAuthor(blog) {
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能关注博主')
+      return
+    }
+    if (!blog.userId || String(blog.userId) === String(user.id)) {
+      setToast('不能关注自己')
+      return
+    }
+    const nextFollow = !blog.isFollow
+    const body = await api(`/follow/${blog.userId}/${nextFollow}`, { method: 'PUT' })
+    if (body.success) {
+      setToast(nextFollow ? '已关注博主' : '已取消关注')
+      updateBlogFollowState(blog.userId, nextFollow)
+      if (blogMode === 'follow' && !nextFollow) {
+        setBlogs((items) => items.filter((item) => String(item.userId) !== String(blog.userId)))
+      }
+      loadProfile()
+    } else {
+      setToast(body.errorMsg || '关注操作失败')
+    }
+  }
+
+  function updateBlogFollowState(userId, isFollow) {
+    setBlogs((items) => items.map((item) => String(item.userId) === String(userId) ? { ...item, isFollow } : item))
+    setSelectedBlog((item) => item && String(item.userId) === String(userId) ? { ...item, isFollow } : item)
+  }
+
+  async function publishBlog(event) {
+    event?.preventDefault()
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能发布探店笔记')
+      return
+    }
+    const shopId = blogDraft.shopId
+    if (!shopId || !blogDraft.title.trim() || !blogDraft.content.trim()) {
+      setToast('请先搜索并确认店铺，再填写标题和正文')
+      return
+    }
+    setBlogPublishing(true)
+    const body = await api('/blog', {
+      method: 'POST',
+      body: JSON.stringify({
+        shopId: String(shopId),
+        title: blogDraft.title.trim(),
+        images: blogDraft.images.trim(),
+        content: blogDraft.content.trim()
+      })
+    })
+    setBlogPublishing(false)
+    if (body.success) {
+      setToast('探店笔记已发布')
+      setBlogDraft(emptyBlogDraft)
+      setBlogShopKeyword('')
+      setBlogShopResults([])
+      setBlogComposerOpen(false)
+      setBlogMode('discover')
+      if (body.data) {
+        const detailBody = await api(`/blog/${body.data}`)
+        if (detailBody.success && detailBody.data) {
+          const createdBlog = normalizeBlog(detailBody.data)
+          setBlogs((items) => [createdBlog, ...items.filter((item) => String(item.id) !== String(createdBlog.id))])
+        } else {
+          loadHotBlogs()
+        }
+      } else {
+        loadHotBlogs()
+      }
+      loadProfile()
+    } else {
+      setToast(body.errorMsg || '发布失败')
+    }
+  }
+
+  async function searchBlogShops(event) {
+    event?.preventDefault()
+    const keyword = blogShopKeyword.trim()
+    if (!keyword) {
+      setToast('请输入店铺名或关键词')
+      return
+    }
+    setBlogShopSearching(true)
+    const body = await api(`/shop/search?${new URLSearchParams({ keyword })}`)
+    setBlogShopSearching(false)
+    if (body.success && Array.isArray(body.data)) {
+      const results = body.data.map(normalizeShop)
+      setBlogShopResults(results)
+      setToast(results.length > 0 ? `找到 ${results.length} 家店铺` : '没有找到匹配店铺')
+    } else {
+      setBlogShopResults([])
+      setToast(body.errorMsg || '店铺搜索失败')
+    }
+  }
+
+  function confirmBlogShop(shop) {
+    setBlogDraft((current) => ({
+      ...current,
+      shopId: shop.id,
+      shopName: shop.name
+    }))
+    setBlogShopKeyword(shop.name)
+    setBlogShopResults([])
+    setToast(`已选择：${shop.name}`)
+  }
+
+  function changeBlogShopKeyword(value) {
+    setBlogShopKeyword(value)
+    setBlogDraft((current) => current.shopName && value !== current.shopName
+      ? { ...current, shopId: '', shopName: '' }
+      : current)
+  }
+
+  async function uploadImages(files, endpoint) {
+    const selected = Array.from(files || []).filter((file) => file.type.startsWith('image/')).slice(0, 9)
+    if (selected.length === 0) return []
+    const urls = []
+    for (const file of selected) {
+      const formData = new FormData()
+      formData.append('file', file)
+      const body = await api(endpoint, {
+        method: 'POST',
+        body: formData
+      })
+      if (!body.success || !body.data?.url) {
+        throw new Error(body.errorMsg || `${file.name} 上传失败`)
+      }
+      urls.push(body.data.url)
+    }
+    return urls
+  }
+
+  async function uploadBlogImages(event) {
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能上传图片')
+      return
+    }
+    setBlogImageUploading(true)
+    try {
+      const urls = await uploadImages(event.target.files, '/upload/blog')
+      if (urls.length > 0) {
+        setBlogDraft((current) => ({
+          ...current,
+          images: mergeImageCsv(current.images, urls).join(',')
+        }))
+        setToast(`已上传 ${urls.length} 张图片`)
+      }
+    } catch (error) {
+      setToast(error.message || '图片上传失败')
+    } finally {
+      setBlogImageUploading(false)
+      event.target.value = ''
+    }
+  }
+
+  async function uploadReviewImages(event) {
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能上传图片')
+      return
+    }
+    setReviewImageUploading(true)
+    try {
+      const urls = await uploadImages(event.target.files, '/upload/file?directory=review')
+      if (urls.length > 0) {
+        setReviewDraft((current) => ({
+          ...current,
+          images: mergeImageList(current.images, urls)
+        }))
+        setToast(`已上传 ${urls.length} 张图片`)
+      }
+    } catch (error) {
+      setToast(error.message || '图片上传失败')
+    } finally {
+      setReviewImageUploading(false)
+      event.target.value = ''
+    }
+  }
+
+  async function publishReview(event) {
+    event?.preventDefault()
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能发布评价')
+      return
+    }
+    if (!selectedBusiness?.id) {
+      setToast('请先打开店铺详情')
+      return
+    }
+    if (!reviewDraft.content.trim()) {
+      setToast('请填写评价内容')
+      return
+    }
+    setReviewPublishing(true)
+    const body = await api('/review', {
+      method: 'POST',
+      body: JSON.stringify({
+        shopId: String(selectedBusiness.id),
+        score: Number(reviewDraft.score),
+        content: reviewDraft.content.trim(),
+        images: reviewDraft.images
+      })
+    })
+    setReviewPublishing(false)
+    if (body.success) {
+      setToast('评价已发布')
+      setReviewDraft(emptyReviewDraft)
+      await loadShopReviews(selectedBusiness.id, 1, true)
+      loadProfile()
+      loadReviewSummary(selectedBusiness.id)
+    } else {
+      setToast(body.errorMsg || '评价发布失败')
+    }
+  }
+
+  async function loadVoucherActivities() {
+    setVoucherLoading(true)
+    const body = await api('/voucher/activities')
+    setVoucherLoading(false)
+    if (body.success && Array.isArray(body.data)) {
+      setVoucherActivities(body.data.map(normalizeVoucher))
+    } else {
+      setVoucherActivities([])
+    }
+  }
+
+  async function claimVoucher(voucher) {
+    if (!user) {
+      setLoginOpen(true)
+      setToast('登录后才能参与活动')
+      return
+    }
+    setVoucherBusyId(voucher.id)
+    const path = voucher.type === 1 ? `/voucher-order/seckill/${voucher.id}` : `/voucher-order/${voucher.id}`
+    const body = await api(path, { method: 'POST' })
+    setVoucherBusyId(null)
+    if (body.success) {
+      setToast(voucher.type === 1 ? `秒杀已受理，订单 ${body.data}` : `领取成功，订单 ${body.data}`)
+      loadVoucherActivities()
+    } else {
+      setToast(body.errorMsg || '参与失败')
+    }
+  }
+
+  async function signToday() {
+    if (!user) {
+      setLoginOpen(true)
+      return
+    }
+    const body = await api('/user/sign', { method: 'POST' })
+    if (body.success) {
+      setToast('签到成功')
+      loadProfile()
+    } else {
+      setToast(body.errorMsg || '签到失败')
+    }
+  }
+
+  async function deleteBlog(blogId) {
+    if (!window.confirm('确定删除这篇探店笔记吗？删除后不可恢复。')) return
+    const body = await api(`/blog/${blogId}`, { method: 'DELETE' })
+    if (body.success) {
+      setToast('笔记已删除')
+      setBlogs((items) => items.filter((item) => String(item.id) !== String(blogId)))
+      loadProfile()
+    } else {
+      setToast(body.errorMsg || '删除笔记失败')
+    }
+  }
+
+  async function deleteReview(reviewId) {
+    if (!window.confirm('确定删除这条评价吗？删除后不可恢复。')) return
+    const body = await api(`/review/${reviewId}`, { method: 'DELETE' })
+    if (body.success) {
+      setToast('评价已删除')
+      loadProfile()
+    } else {
+      setToast(body.errorMsg || '删除评价失败')
+    }
+  }
+
+  function changeFilter(nextFilter) {
+    setActiveFilter(nextFilter)
+    setIsFiltering(true)
+    window.setTimeout(() => setIsFiltering(false), 280)
+  }
+
+  function runSearch(event) {
+    event?.preventDefault()
+    const value = query.trim()
+    setIsFiltering(true)
+    if (value) {
+      searchServerShops(value)
+      setActiveView('home')
+      return
+    }
+    setError('')
+    window.setTimeout(() => setIsFiltering(false), 320)
+  }
+
+  async function sendAiChatMessage(event, overrideMessage) {
+    event?.preventDefault()
+    const message = (overrideMessage || aiChatInput).trim()
+    if (!message || aiChatLoading) return
+    const userMessage = { role: 'user', content: message, generatedAt: new Date().toISOString() }
+    setAiChatMessages((items) => [...items, userMessage])
+    setAiChatInput('')
+    setAiChatOpen(true)
+    setAiChatLoading(true)
+    const history = aiChatMessages.slice(-8).map(({ role, content }) => ({ role, content }))
+    const body = await api('/ai/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        route: 'CHAT',
+        shopId: selectedBusiness?.id || null,
+        message,
+        history
+      })
+    })
+    setAiChatLoading(false)
+    setAiChatMessages((items) => [
+      ...items,
+      {
+        role: 'assistant',
+        content: body.success && body.data?.answer
+          ? body.data.answer
+          : body.errorMsg || 'AI 助手暂不可用，请稍后再试。',
+        generatedAt: body.data?.generatedAt || new Date().toISOString(),
+        agentRoute: body.data?.agentRoute,
+        memoryUpdated: Boolean(body.data?.memoryUpdated),
+        error: !body.success
+      }
+    ])
+  }
+
+  const dataSource = usingServerData ? serverBusinesses : mockBusinesses
+  const visibleBusinesses = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    const filtered = dataSource.filter((item) => {
+      const categoryMatched = usingServerData
+        || activeCategory === 'food'
+        || activeCategory === 'all-server'
+        || item.categoryId === activeCategory
+      const districtMatched = activeDistrict === '全部' || item.district === activeDistrict
+      const keywordMatched = !keyword || [
+        item.name,
+        item.category,
+        item.district,
+        item.address,
+        item.summary,
+        ...item.tags,
+        ...item.deals
+      ].join(' ').toLowerCase().includes(keyword)
+      return categoryMatched && districtMatched && keywordMatched
+    })
+    return (filterStrategies[activeFilter] || filterStrategies.nearby)(filtered)
+  }, [activeCategory, activeDistrict, activeFilter, dataSource, query, usingServerData])
+
+  return (
+    <div className="app-shell">
+      <Header
+        city={city}
+        setCity={setCity}
+        query={query}
+        setQuery={setQuery}
+        onSearch={runSearch}
+        activeView={activeView}
+        setActiveView={setActiveView}
+        user={user}
+        onLogin={() => setLoginOpen(true)}
+        onLogout={logout}
+      />
+      <main className="page-enter">
+        {activeView === 'home' && (
+          <HomePage
+            query={query}
+            setQuery={setQuery}
+            categoryOptions={categoryOptions}
+            activeCategory={activeCategory}
+            setActiveCategory={setActiveCategory}
+            loadServerShops={loadServerShops}
+            changeFilter={changeFilter}
+            visibleBusinesses={visibleBusinesses}
+            isLoading={isLoading || isFiltering}
+            error={error}
+            activeFilter={activeFilter}
+            activeDistrict={activeDistrict}
+            setActiveDistrict={setActiveDistrict}
+            onOpenBusiness={openBusinessDetail}
+            rankings={rankings}
+            dataSource={dataSource}
+          />
+        )}
+        {activeView === 'blogs' && (
+          <BlogPage
+            blogs={blogs}
+            loading={blogLoading}
+            activeMode={blogMode}
+            onModeChange={changeBlogMode}
+            onRefresh={refreshBlogs}
+            composerOpen={blogComposerOpen}
+            setComposerOpen={setBlogComposerOpen}
+            onOpen={openBlogDetail}
+            onLike={likeBlog}
+            onFollow={toggleFollowBlogAuthor}
+            onPublish={publishBlog}
+            draft={blogDraft}
+            setDraft={setBlogDraft}
+            publishing={blogPublishing}
+            shops={dataSource}
+            user={user}
+            onLogin={() => setLoginOpen(true)}
+            onUploadImages={uploadBlogImages}
+            imageUploading={blogImageUploading}
+            shopKeyword={blogShopKeyword}
+            setShopKeyword={changeBlogShopKeyword}
+            shopResults={blogShopResults}
+            shopSearching={blogShopSearching}
+            onSearchShops={searchBlogShops}
+            onConfirmShop={confirmBlogShop}
+            followHasMore={followFeedCursor.hasMore}
+            onLoadMoreFollow={() => loadFollowBlogs({ replace: false })}
+          />
+        )}
+        {activeView === 'deals' && (
+          <DealPage
+            activities={voucherActivities}
+            loading={voucherLoading}
+            busyId={voucherBusyId}
+            onRefresh={loadVoucherActivities}
+            onClaim={claimVoucher}
+            onOpenShop={openBusinessDetail}
+          />
+        )}
+        {activeView === 'profile' && (
+          <ProfilePage
+            user={user}
+            data={profileData}
+            loading={profileLoading}
+            onLogin={() => setLoginOpen(true)}
+            onRefresh={loadProfile}
+            onSign={signToday}
+            onLogout={logout}
+            onOpenBlog={openBlogDetail}
+            onDeleteBlog={deleteBlog}
+            onDeleteReview={deleteReview}
+          />
+        )}
+      </main>
+      <BusinessDetail
+        business={selectedBusiness}
+        vouchers={detailVouchers}
+        reviewSummary={reviewSummary}
+        loading={detailLoading}
+        onClose={() => {
+          activeDetailIdRef.current = ''
+          setSelectedBusiness(null)
+          setReviewSummaryLoading(false)
+        }}
+        voucherBusyId={voucherBusyId}
+        onClaimVoucher={claimVoucher}
+        onAskAiReview={() => sendAiChatMessage(null, '请分析这家店的评价，说明优点、槽点和适合人群')}
+        reviews={shopReviews}
+        reviewLoading={reviewLoading}
+        reviewHasMore={reviewHasMore}
+        onLoadMoreReviews={loadMoreReviews}
+        reviewSummaryLoading={reviewSummaryLoading}
+        user={user}
+        onLogin={() => setLoginOpen(true)}
+        reviewDraft={reviewDraft}
+        setReviewDraft={setReviewDraft}
+        onPublishReview={publishReview}
+        onUploadReviewImages={uploadReviewImages}
+        reviewPublishing={reviewPublishing}
+        reviewImageUploading={reviewImageUploading}
+      />
+      <BlogDialog blog={selectedBlog} loading={blogDetailLoading} onClose={() => setSelectedBlog(null)} onLike={likeBlog} />
+      <LoginDialog
+        open={loginOpen}
+        email={email}
+        code={code}
+        countdown={countdown}
+        busy={authBusy}
+        setEmail={setEmail}
+        setCode={setCode}
+        onSendCode={sendCode}
+        onLogin={login}
+        onClose={() => setLoginOpen(false)}
+      />
+      <AiChatWidget
+        open={aiChatOpen}
+        onToggle={() => setAiChatOpen((value) => !value)}
+        messages={aiChatMessages}
+        input={aiChatInput}
+        setInput={setAiChatInput}
+        loading={aiChatLoading}
+        selectedBusiness={selectedBusiness}
+        onOpenBusiness={openBusinessDetail}
+        onSubmit={sendAiChatMessage}
+      />
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
+  )
 }
 
-function yuan(value) {
-  if (value === null || value === undefined || value === '') return '-'
-  return `¥${(Number(value) / 100).toFixed(0)}`
+function Header({ city, setCity, query, setQuery, onSearch, activeView, setActiveView, user, onLogin, onLogout }) {
+  return (
+    <header className="site-header">
+      <button type="button" className="brand" onClick={() => setActiveView('home')} aria-label="Spot Life 首页">
+        <span className="brand-logo">S</span>
+        <span>
+          <strong>Spot Life</strong>
+          <small>发现附近好店</small>
+        </span>
+      </button>
+      <label className="city-picker">
+        <span>城市</span>
+        <select value={city} onChange={(event) => setCity(event.target.value)} aria-label="选择城市">
+          {cityOptions.map((item) => <option key={item}>{item}</option>)}
+        </select>
+      </label>
+      <form className="search-bar" onSubmit={onSearch}>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索美食、商圈、店名"
+          aria-label="搜索美食、商圈、店名"
+        />
+        <button type="submit" aria-label="搜索">搜索</button>
+      </form>
+      <nav className="header-actions" aria-label="主导航">
+        {navItems.map((item) => (
+          <button
+            type="button"
+            key={item.id}
+            className={activeView === item.id ? 'nav-active' : ''}
+            onClick={() => setActiveView(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+        {user
+          ? <button type="button" className="user-entry" onClick={onLogout}>{user.nickName || '退出'}</button>
+          : <button type="button" className="user-entry" onClick={onLogin}>登录</button>}
+      </nav>
+    </header>
+  )
 }
 
-function scoreText(score) {
-  if (!score && score !== 0) return '暂无评分'
-  return `${(Number(score) / 10).toFixed(1)} 分`
+function HomePage({
+  setQuery,
+  categoryOptions,
+  activeCategory,
+  setActiveCategory,
+  loadServerShops,
+  changeFilter,
+  visibleBusinesses,
+  isLoading,
+  error,
+  activeFilter,
+  activeDistrict,
+  setActiveDistrict,
+  onOpenBusiness,
+  rankings,
+  dataSource
+}) {
+  return (
+    <>
+      <HeroSection onQuickSearch={(value) => {
+        setQuery(value)
+        changeFilter('deal')
+      }} />
+      <CategoryNav
+        categories={categoryOptions}
+        activeCategory={activeCategory}
+        onSelect={(id) => {
+          setActiveCategory(id)
+          const selected = categoryOptions.find((item) => item.id === id)
+          if (selected?.sourceId) loadServerShops(selected.sourceId)
+          changeFilter('nearby')
+        }}
+      />
+      <section className="content-layout" aria-label="商家浏览区">
+        <div className="main-column">
+          <FilterBar
+            filters={filters}
+            districts={['全部', ...districts]}
+            activeFilter={activeFilter}
+            activeDistrict={activeDistrict}
+            onFilter={changeFilter}
+            onDistrict={(district) => setActiveDistrict(district)}
+            resultCount={visibleBusinesses.length}
+          />
+          <BusinessList
+            businesses={visibleBusinesses}
+            loading={isLoading}
+            error={error}
+            onRetry={() => window.location.reload()}
+            onOpen={onOpenBusiness}
+            onClearSearch={() => setQuery('')}
+          />
+        </div>
+        <aside className="side-column" aria-label="热门榜单">
+          <RankingSection rankings={rankings} onOpen={(name) => {
+            const target = [...dataSource, ...mockBusinesses].find((item) => item.name === name)
+            if (target) onOpenBusiness(target)
+          }} />
+        </aside>
+      </section>
+    </>
+  )
 }
 
-function distanceText(distance) {
-  if (!distance && distance !== 0) return '距离未知'
-  const value = Number(distance)
-  return value >= 1 ? `${value.toFixed(1)}km` : `${Math.round(value * 1000)}m`
+function HeroSection({ onQuickSearch }) {
+  return (
+    <section className="hero-section">
+      <div className="hero-copy">
+        <p className="eyebrow">西安本地精选</p>
+        <h1>发现附近值得去的好店</h1>
+        <p>从评分、距离、优惠和真实评价里快速判断今天去哪吃、去哪玩。</p>
+        <div className="hero-quick-actions">
+          {['火锅优惠', '钟楼夜宵', '高新咖啡'].map((item) => (
+            <button key={item} type="button" onClick={() => onQuickSearch(item)}>{item}</button>
+          ))}
+        </div>
+      </div>
+      <div className="hero-stack" aria-hidden="true">
+        <article className="deal-ticket">
+          <span>今日专享</span>
+          <strong>附近好店券</strong>
+          <small>最高立减 30 元</small>
+        </article>
+        <article className="floating-shop-card">
+          <img src={mockBusinesses[0].image} alt="" />
+          <div>
+            <strong>{mockBusinesses[0].name}</strong>
+            <span>4.8 分 · 小寨 · 人均 ¥88</span>
+          </div>
+        </article>
+      </div>
+    </section>
+  )
 }
 
-function hoursText(hours) {
-  if (!hours) return '待补充'
-  return String(hours).trim().replace(/\s+(?=\d{1,2}:\d{2})/g, '\n')
+function CategoryNav({ categories, activeCategory, onSelect }) {
+  return (
+    <section className="category-section" aria-labelledby="category-title">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">分类导航</p>
+          <h2 id="category-title">按场景快速进入</h2>
+        </div>
+      </div>
+      <div className="category-scroll" role="list">
+        {categories.map((item) => {
+          const Icon = categoryIconMap[item.iconKey || categoryIconKey(item.name)] || categoryIconMap.default
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={activeCategory === item.id ? 'category-item active' : 'category-item'}
+              onClick={() => onSelect(item.id)}
+              aria-pressed={activeCategory === item.id}
+            >
+              <span className="category-icon" aria-hidden="true">
+                <Icon size={22} strokeWidth={2.25} />
+              </span>
+              <strong>{item.name}</strong>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
 }
 
-function dateText(value) {
-  if (!value) return ''
-  return String(value).slice(0, 10)
+function FilterBar({ filters, districts, activeFilter, activeDistrict, onFilter, onDistrict, resultCount }) {
+  return (
+    <section className="filter-panel" aria-label="筛选排序">
+      <div className="filter-head">
+        <div>
+          <h2>推荐商家</h2>
+          <p>共找到 {resultCount} 家可比较商家</p>
+        </div>
+        <label>
+          商圈
+          <select value={activeDistrict} onChange={(event) => onDistrict(event.target.value)}>
+            {districts.map((district) => <option key={district}>{district}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="filter-chips" role="list">
+        {filters.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={activeFilter === item.id ? 'filter-chip active' : 'filter-chip'}
+            onClick={() => onFilter(item.id)}
+            aria-pressed={activeFilter === item.id}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  )
 }
 
-function timeText(value) {
-  if (!value) return '长期有效'
-  return String(value).replace('T', ' ').slice(0, 16)
+function BusinessList({ businesses, loading, error, onRetry, onOpen, onClearSearch }) {
+  if (loading) return <LoadingSkeleton />
+  if (error) return <ErrorState message={error} onRetry={onRetry} />
+  if (businesses.length === 0) {
+    return (
+      <EmptyState
+        title="没有找到匹配商家"
+        text="换个关键词、商圈或分类试试，也可以清空筛选重新浏览附近好店。"
+        action="清空筛选"
+        onAction={onClearSearch}
+      />
+    )
+  }
+  return (
+    <section className="business-list" aria-label="推荐商家列表">
+      {businesses.map((business, index) => (
+        <BusinessCard key={business.id} business={business} index={index} onOpen={() => onOpen(business)} />
+      ))}
+    </section>
+  )
+}
+
+function BusinessCard({ business, index, onOpen }) {
+  return (
+    <article className="business-card" style={{ animationDelay: `${index * 45}ms` }}>
+      <button className="image-button" type="button" onClick={onOpen} aria-label={`查看${business.name}详情`}>
+        <img src={business.image} alt={business.name} />
+        <span>{business.reason}</span>
+      </button>
+      <div className="business-body">
+        <div className="business-title-row">
+          <div>
+            <p className="business-meta">{business.category} · {business.district}</p>
+            <h3>{business.name}</h3>
+          </div>
+          <button type="button" className="detail-button" onClick={onOpen}>看详情</button>
+        </div>
+        <div className="decision-row">
+          <span className="rating">{stars(business.rating)} <strong>{business.rating}</strong></span>
+          <span>{business.reviews.toLocaleString()} 条评价</span>
+          <span>人均 ¥{business.avgPrice}</span>
+          <span>{business.distance}km</span>
+        </div>
+        <p className="address-line">{business.address}</p>
+        <p className="summary-line">{business.summary}</p>
+        <div className="deal-row">
+          {business.deals.slice(0, 2).map((deal) => <span key={deal}>{deal}</span>)}
+        </div>
+        <div className="tag-row">
+          {business.tags.slice(0, 3).map((tag) => <small key={tag}>{repairText(tag)}</small>)}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function RankingSection({ rankings, onOpen }) {
+  return (
+    <section className="ranking-section">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">热门榜单</p>
+          <h2>大家正在看</h2>
+        </div>
+      </div>
+      <div className="ranking-grid">
+        {rankings.map((ranking) => (
+          <article className="ranking-card" key={ranking.id}>
+            <h3>{ranking.title}</h3>
+            <ol>
+              {ranking.items.map((item) => (
+                <li key={`${ranking.id}-${item.name}`}>
+                  <button type="button" onClick={() => onOpen(item.name)}>
+                    <span className={item.rank === 1 ? 'rank top' : 'rank'}>{item.rank}</span>
+                    <strong>{item.name}</strong>
+                    <small>{item.score} 分 · {item.reason}</small>
+                    <em>{item.tag}</em>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function BusinessDetail({
+  business,
+  vouchers,
+  reviewSummary,
+  loading,
+  onClose,
+  voucherBusyId,
+  onClaimVoucher,
+  onAskAiReview,
+  reviews,
+  reviewLoading,
+  reviewHasMore,
+  onLoadMoreReviews,
+  reviewSummaryLoading,
+  user,
+  onLogin,
+  reviewDraft,
+  setReviewDraft,
+  onPublishReview,
+  onUploadReviewImages,
+  reviewPublishing,
+  reviewImageUploading
+}) {
+  useEffect(() => {
+    if (!business) return undefined
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [business, onClose])
+
+  if (!business) return null
+
+  function handleScroll(event) {
+    const target = event.currentTarget
+    if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) {
+      onLoadMoreReviews()
+    }
+  }
+
+  return (
+    <div className="drawer-backdrop" role="presentation" onClick={onClose}>
+      <aside className="business-drawer" role="dialog" aria-modal="true" aria-labelledby="business-detail-title" onClick={(event) => event.stopPropagation()} onScroll={handleScroll}>
+        <button className="drawer-close" type="button" onClick={onClose} aria-label="关闭详情">×</button>
+        <img className="drawer-hero" src={business.image} alt={business.name} />
+        <div className="drawer-content">
+          <p className="business-meta">{business.category} · {business.district}</p>
+          <h2 id="business-detail-title">{business.name}</h2>
+          <div className="drawer-score">
+            <strong>{business.rating}</strong>
+            <span>{stars(business.rating)} · {business.reviews.toLocaleString()} 条评价 · 人均 ¥{business.avgPrice}</span>
+          </div>
+          <dl className="info-list">
+            <div><dt>地址</dt><dd>{business.address}</dd></div>
+            <div><dt>营业</dt><dd>{business.hours}</dd></div>
+            <div><dt>电话</dt><dd>{business.phone}</dd></div>
+          </dl>
+          <ReviewAiSummary summary={reviewSummary} loading={reviewSummaryLoading} onAskAi={onAskAiReview} />
+          <DetailSection title="优惠套餐">
+            <div className="drawer-deals">
+              {vouchers?.length ? vouchers.map((voucher) => (
+                <button type="button" key={voucher.id} onClick={() => onClaimVoucher(voucher)} disabled={voucherBusyId === voucher.id}>
+                  {formatVoucher(voucher)}
+                  <span>{voucherBusyId === voucher.id ? '处理中' : voucher.type === 1 ? '立即秒杀' : '立即领取'}</span>
+                </button>
+              )) : business.deals.map((deal) => (
+                <button type="button" key={deal}>{deal}<span>{loading ? '加载中' : '暂无可领券'}</span></button>
+              ))}
+            </div>
+          </DetailSection>
+          <DetailSection title="推荐菜 / 服务">
+            <div className="dish-row">
+              {business.dishes.map((dish) => <span key={dish}>{dish}</span>)}
+            </div>
+          </DetailSection>
+          <ReviewComposer
+            user={user}
+            draft={reviewDraft}
+            setDraft={setReviewDraft}
+            onSubmit={onPublishReview}
+            onUploadImages={onUploadReviewImages}
+            publishing={reviewPublishing}
+            imageUploading={reviewImageUploading}
+            onLogin={onLogin}
+          />
+          <ReviewList reviews={reviews} loading={reviewLoading} hasMore={reviewHasMore} onLoadMore={onLoadMoreReviews} />
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+function ReviewComposer({ user, draft, setDraft, onSubmit, onUploadImages, publishing, imageUploading, onLogin }) {
+  const updateDraft = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
+  const removeImage = (url) => setDraft((current) => ({ ...current, images: current.images.filter((image) => image !== url) }))
+  return (
+    <DetailSection title="写评价">
+      <form className="review-composer" onSubmit={onSubmit}>
+        {!user ? (
+          <button type="button" className="primary-action" onClick={onLogin}>登录后评价</button>
+        ) : (
+          <>
+            <div className="score-picker" aria-label="评价星级">
+              {[1, 2, 3, 4, 5].map((score) => (
+                <button
+                  type="button"
+                  key={score}
+                  className={score <= draft.score ? 'active' : ''}
+                  onClick={() => updateDraft('score', score)}
+                  aria-label={`${score} 星`}
+                >
+                  ★
+                </button>
+              ))}
+              <span>{draft.score} 星</span>
+            </div>
+            <textarea
+              value={draft.content}
+              maxLength={2048}
+              onChange={(event) => updateDraft('content', event.target.value)}
+              placeholder="分享口味、环境、服务和适合人群"
+            />
+            <label className="upload-trigger">
+              <input type="file" accept="image/*" multiple onChange={onUploadImages} disabled={imageUploading || draft.images.length >= 9} />
+              <span>{imageUploading ? '图片上传中...' : '上传评价图片'}</span>
+              <small>{draft.images.length}/9</small>
+            </label>
+            {draft.images.length > 0 && (
+              <div className="upload-preview-grid">
+                {draft.images.map((image) => (
+                  <button type="button" key={image} onClick={() => removeImage(image)} aria-label="移除图片">
+                    <img src={image} alt="" />
+                  </button>
+                ))}
+              </div>
+            )}
+            <button type="submit" className="primary-action" disabled={publishing || imageUploading}>{publishing ? '发布中' : '发布评价'}</button>
+          </>
+        )}
+      </form>
+    </DetailSection>
+  )
+}
+
+function ReviewList({ reviews, loading, hasMore, onLoadMore }) {
+  return (
+    <DetailSection title="用户评价">
+      <div className="review-list" aria-busy={loading}>
+        {reviews.length === 0 && !loading ? (
+          <div className="review-empty">
+            <strong>暂无用户评价</strong>
+            <p>这家店还没有可展示的评价。</p>
+          </div>
+        ) : (
+          reviews.map((review) => <ReviewItem key={review.id} review={review} />)
+        )}
+        {loading && <ReviewSkeleton />}
+        {hasMore && !loading && (
+          <button type="button" className="load-more-button" onClick={onLoadMore}>查看更多评价</button>
+        )}
+        {!hasMore && reviews.length > 0 && <p className="review-end">已经到底了</p>}
+      </div>
+    </DetailSection>
+  )
+}
+
+function ReviewItem({ review }) {
+  return (
+    <article className="review-card">
+      <div className="review-head">
+        <img src={review.userIcon} alt="" />
+        <div>
+          <strong>{review.userName}</strong>
+          <span>{stars(review.score)} · {review.createTime}</span>
+        </div>
+      </div>
+      <p>{review.content || '这位用户暂未填写文字评价。'}</p>
+      {review.images.length > 0 && (
+        <div className="review-images">
+          {review.images.slice(0, 4).map((image, index) => <img key={`${review.id}-${index}`} src={image} alt="" />)}
+        </div>
+      )}
+      <small>赞 {review.liked || 0}</small>
+    </article>
+  )
+}
+
+function ReviewSkeleton() {
+  return (
+    <div className="review-skeleton" aria-label="评价加载中">
+      <span />
+      <span />
+      <span />
+    </div>
+  )
+}
+
+function ReviewAiSummary({ summary, loading, onAskAi }) {
+  const ready = summary?.status === 'READY'
+  const positives = summary?.positiveTags || summary?.highlights || []
+  const negatives = summary?.negativeTags || summary?.weaknesses || []
+  const scenes = summary?.scenes || []
+  return (
+    <section className="ai-review-card">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">AI 评论分析</p>
+          <h3>评价口碑总结</h3>
+        </div>
+        <button type="button" className="text-action" onClick={onAskAi}>问 AI</button>
+      </div>
+      {loading ? <p>正在分析评价...</p> : ready ? (
+        <>
+          <p>{repairText(summary.summary) || '暂无总结文本'}</p>
+          <div className="summary-tag-grid">
+            {positives.slice(0, 4).map((tag) => <span key={tag}>{repairText(tag)}</span>)}
+            {negatives.slice(0, 3).map((tag) => <span key={tag} className="caution">{repairText(tag)}</span>)}
+            {scenes.slice(0, 3).map((tag) => <span key={tag} className="scene">{repairText(tag)}</span>)}
+          </div>
+        </>
+      ) : (
+        <p>{summary?.message || '该店铺暂未生成 AI 评论总结，可点击“问 AI”结合当前店铺上下文分析。'}</p>
+      )}
+    </section>
+  )
+}
+
+function BlogPage({
+  blogs,
+  loading,
+  activeMode,
+  onModeChange,
+  onRefresh,
+  composerOpen,
+  setComposerOpen,
+  onOpen,
+  onLike,
+  onFollow,
+  onPublish,
+  draft,
+  setDraft,
+  publishing,
+  user,
+  onLogin,
+  onUploadImages,
+  imageUploading,
+  shopKeyword,
+  setShopKeyword,
+  shopResults,
+  shopSearching,
+  onSearchShops,
+  onConfirmShop,
+  followHasMore,
+  onLoadMoreFollow
+}) {
+  const updateDraft = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
+  const draftImages = imageCsvToList(draft.images)
+  const removeImage = (url) => setDraft((current) => ({
+    ...current,
+    images: imageCsvToList(current.images).filter((image) => image !== url).join(',')
+  }))
+  return (
+    <section className="page-panel">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">探店笔记</p>
+          <h1>{activeMode === 'follow' ? '关注博主的新笔记' : '真实用户正在分享的店'}</h1>
+        </div>
+        <div className="blog-toolbar">
+          <div className="mode-switch" role="tablist" aria-label="探店笔记视图">
+            <button type="button" role="tab" aria-selected={activeMode === 'discover'} className={activeMode === 'discover' ? 'active' : ''} onClick={() => onModeChange('discover')}>发现</button>
+            <button type="button" role="tab" aria-selected={activeMode === 'follow'} className={activeMode === 'follow' ? 'active' : ''} onClick={() => onModeChange('follow')}>关注</button>
+          </div>
+          <button type="button" className="icon-action" onClick={() => setComposerOpen((value) => !value)} aria-expanded={composerOpen} aria-label={composerOpen ? '收起发布笔记' : '发布探店笔记'}>
+            {composerOpen ? '×' : '+'}
+          </button>
+          <button type="button" className="secondary-action" onClick={onRefresh}>刷新</button>
+        </div>
+      </div>
+      <form className={`blog-composer ${composerOpen ? 'open' : ''}`} onSubmit={onPublish} aria-hidden={!composerOpen}>
+        <div>
+          <p className="eyebrow">发布笔记</p>
+          <h2>写一条真实探店体验</h2>
+        </div>
+        {!user ? (
+          <button type="button" className="primary-action" onClick={onLogin}>登录后发布</button>
+        ) : (
+          <>
+            <div className="composer-grid">
+              <ShopSearchField
+                keyword={shopKeyword}
+                setKeyword={setShopKeyword}
+                results={shopResults}
+                searching={shopSearching}
+                selectedName={draft.shopName}
+                onSearch={onSearchShops}
+                onConfirm={onConfirmShop}
+              />
+              <label>
+                标题
+                <input value={draft.title} maxLength={255} onChange={(event) => updateDraft('title', event.target.value)} placeholder="例如：周末值得专程去的一家店" />
+              </label>
+            </div>
+            <label className="upload-trigger">
+              <input type="file" accept="image/*" multiple onChange={onUploadImages} disabled={imageUploading || draftImages.length >= 9} />
+              <span>{imageUploading ? '图片上传中...' : '上传探店图片'}</span>
+              <small>{draftImages.length}/9</small>
+            </label>
+            {draftImages.length > 0 && (
+              <div className="upload-preview-grid">
+                {draftImages.map((image) => (
+                  <button type="button" key={image} onClick={() => removeImage(image)} aria-label="移除图片">
+                    <img src={image} alt="" />
+                  </button>
+                ))}
+              </div>
+            )}
+            <label>
+              正文
+              <textarea value={draft.content} maxLength={2048} onChange={(event) => updateDraft('content', event.target.value)} placeholder="说说环境、口味、服务和适合人群" />
+            </label>
+            <button type="submit" className="primary-action" disabled={publishing}>{publishing ? '发布中' : '发布笔记'}</button>
+          </>
+        )}
+      </form>
+      {loading ? <LoadingSkeleton /> : blogs.length === 0 ? (
+        <EmptyState
+          title={activeMode === 'follow' ? '暂无关注笔记' : '暂无探店笔记'}
+          text={activeMode === 'follow' ? '关注一些博主后，这里会展示他们的新笔记。' : '暂时没有可展示的探店笔记。'}
+        />
+      ) : (
+        <div className="blog-grid blog-grid-enter">
+          {blogs.map((blog) => <BlogCard key={blog.id} blog={blog} onOpen={() => onOpen(blog)} onLike={() => onLike(blog.id)} onFollow={() => onFollow(blog)} />)}
+        </div>
+      )}
+      {activeMode === 'follow' && !loading && followHasMore && (
+        <button type="button" className="load-more-button" onClick={onLoadMoreFollow}>查看更多关注笔记</button>
+      )}
+    </section>
+  )
+}
+
+function ShopSearchField({ keyword, setKeyword, results, searching, selectedName, onSearch, onConfirm }) {
+  return (
+    <div className="shop-search-field">
+      <label>
+        店铺
+        <div className="shop-search-row">
+          <input
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            placeholder="搜索店铺名、商圈或关键词"
+            aria-label="搜索店铺"
+          />
+          <button type="button" onClick={onSearch} disabled={searching}>{searching ? '搜索中' : '搜索'}</button>
+        </div>
+      </label>
+      {selectedName && <p className="selected-shop-line">已确认：{selectedName}</p>}
+      {results.length > 0 && (
+        <div className="shop-search-results" role="list">
+          {results.map((shop) => (
+            <button type="button" key={shop.id} onClick={() => onConfirm(shop)} role="listitem">
+              <strong>{shop.name}</strong>
+              <span>{shop.category} · {shop.district || '未知商圈'} · 人均 ¥{shop.avgPrice}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BlogCard({ blog, onOpen, onLike, onDelete, onFollow }) {
+  return (
+    <article className="blog-card">
+      <button type="button" className="blog-cover" onClick={onOpen}>
+        {blog.image ? <img src={blog.image} alt={blog.title} /> : <span>{blog.title.slice(0, 2)}</span>}
+      </button>
+      <div>
+        <h3>{blog.title}</h3>
+        <p>{blog.excerpt}</p>
+        <div className="blog-meta">
+          <span>{blog.author}</span>
+          <div className="card-actions">
+            {onFollow && blog.userId && <button type="button" onClick={onFollow}>{blog.isFollow ? '已关注' : '关注'}</button>}
+            <button type="button" onClick={onLike}>赞 {blog.liked || 0}</button>
+            {onDelete && <button type="button" className="danger-action" onClick={onDelete}>删除</button>}
+          </div>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function BlogDialog({ blog, loading, onClose, onLike }) {
+  if (!blog) return null
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section className="blog-dialog" role="dialog" aria-modal="true" aria-labelledby="blog-title" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭笔记">×</button>
+        {loading ? <LoadingSkeleton /> : (
+          <>
+            {blog.images.length > 0 && (
+              <div className="blog-dialog-images">
+                {blog.images.map((image, index) => <img className="blog-dialog-image" key={`${blog.id}-${index}`} src={image} alt={index === 0 ? blog.title : ''} />)}
+              </div>
+            )}
+            <p className="eyebrow">{blog.author}</p>
+            <h2 id="blog-title">{blog.title}</h2>
+            <p className="blog-dialog-content">{blog.fullContent || '这篇笔记暂时没有正文内容。'}</p>
+            <button type="button" className="secondary-action" onClick={() => onLike(blog.id)}>点赞 {blog.liked || 0}</button>
+          </>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function DealPage({ activities, loading, busyId, onRefresh, onClaim, onOpenShop }) {
+  const active = activities.filter((item) => item.activityStatus === 'ACTIVE')
+  const upcoming = activities.filter((item) => item.activityStatus === 'UPCOMING')
+  const normal = activities.filter((item) => item.type === 0)
+  return (
+    <section className="page-panel">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">秒杀活动</p>
+          <h1>限时券和代金券</h1>
+        </div>
+        <button type="button" className="secondary-action" onClick={onRefresh}>刷新</button>
+      </div>
+      {loading ? <LoadingSkeleton /> : (
+        <div className="deal-sections">
+          <VoucherSection title="正在秒杀" items={active} busyId={busyId} onClaim={onClaim} onOpenShop={onOpenShop} />
+          <VoucherSection title="即将开始" items={upcoming} busyId={busyId} onClaim={onClaim} onOpenShop={onOpenShop} />
+          <VoucherSection title="代金券" items={normal} busyId={busyId} onClaim={onClaim} onOpenShop={onOpenShop} />
+          {activities.length === 0 && <EmptyState title="暂无活动" text="后端暂无可展示的秒杀或代金券活动。" />}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function VoucherSection({ title, items, busyId, onClaim, onOpenShop }) {
+  if (items.length === 0) return null
+  return (
+    <section className="voucher-section">
+      <h2>{title}</h2>
+      <div className="voucher-grid">
+        {items.map((item) => (
+          <article className="voucher-card" key={item.id}>
+            <div className="voucher-value">
+              <strong>{yuan(item.actualValue)}</strong>
+              <span>{item.payValue > 0 ? `${yuan(item.payValue)} 抢` : '免费领'}</span>
+            </div>
+            <div className="voucher-body">
+              <h3>{item.title}</h3>
+              <button type="button" className="text-action" onClick={() => onOpenShop(item.shopId)}>{item.shopName || `商户 ${item.shopId}`}</button>
+              <p>{item.subTitle || item.rules || '到店消费可用'}</p>
+              {item.type === 1 && <p>库存 {item.stock ?? '-'} · {timeText(item.beginTime)} 至 {timeText(item.endTime)}</p>}
+              <button type="button" className="primary-action" disabled={busyId === item.id || item.activityStatus !== 'ACTIVE'} onClick={() => onClaim(item)}>
+                {busyId === item.id ? '处理中' : item.activityStatus === 'ACTIVE' ? (item.type === 1 ? '立即秒杀' : '立即领取') : '未开始'}
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ProfilePage({ user, data, loading, onLogin, onRefresh, onSign, onLogout, onOpenBlog, onDeleteBlog, onDeleteReview }) {
+  if (!user) {
+    return (
+      <section className="page-panel profile-empty">
+        <p className="eyebrow">用户详情</p>
+        <h1>登录后查看你的探店数据</h1>
+        <p>后端支持用户资料、签到、我的笔记、点赞、优惠券和评价数据。</p>
+        <button type="button" className="primary-action" onClick={onLogin}>立即登录</button>
+      </section>
+    )
+  }
+  const blogs = data?.myBlogs || []
+  const liked = data?.likedBlogs || []
+  const vouchers = data?.vouchers || []
+  const reviews = data?.reviews || []
+  return (
+    <section className="page-panel">
+      <div className="profile-banner">
+        <div className="avatar">{(user.nickName || 'U').slice(0, 1)}</div>
+        <div>
+          <p className="eyebrow">当前登录</p>
+          <h1>{user.nickName || `用户 ${user.id}`}</h1>
+          <p>连续签到 {data?.signDays ?? 0} 天 · 优惠券 {data?.voucherCount ?? vouchers.length} 张</p>
+        </div>
+        <div className="profile-actions">
+          <button type="button" className="secondary-action" onClick={onRefresh} disabled={loading}>刷新</button>
+          <button type="button" className="secondary-action" onClick={onSign}>签到</button>
+          <button type="button" className="secondary-action" onClick={onLogout}>退出</button>
+        </div>
+      </div>
+      <ProfileSection title="我的优惠券" empty="暂无优惠券">
+        {vouchers.map((item) => <UserVoucher key={item.orderId || item.voucherId} voucher={normalizeVoucher(item)} />)}
+      </ProfileSection>
+      <ProfileSection title="我的探店笔记" empty="暂无笔记">
+        {blogs.map((blog) => <BlogCard key={blog.id} blog={normalizeBlog(blog)} onOpen={() => onOpenBlog(normalizeBlog(blog))} onLike={() => {}} onDelete={() => onDeleteBlog(blog.id)} />)}
+      </ProfileSection>
+      <ProfileSection title="我点赞的笔记" empty="暂无点赞">
+        {liked.map((blog) => <BlogCard key={blog.id} blog={normalizeBlog(blog)} onOpen={() => onOpenBlog(normalizeBlog(blog))} onLike={() => {}} />)}
+      </ProfileSection>
+      <ProfileSection title="我的评价" empty="暂无评价">
+        {reviews.map((review) => <article className="review-list-item" key={review.id}><strong>{repairText(review.shopName) || '评价'}</strong><p>{repairText(review.content)}</p><button type="button" className="danger-action" onClick={() => onDeleteReview(review.id)}>删除</button></article>)}
+      </ProfileSection>
+    </section>
+  )
+}
+
+function ProfileSection({ title, empty, children }) {
+  const items = React.Children.toArray(children).filter(Boolean)
+  return (
+    <section className="profile-section">
+      <h2>{title}</h2>
+      {items.length > 0 ? <div className="profile-grid">{items}</div> : <p className="muted-line">{empty}</p>}
+    </section>
+  )
+}
+
+function UserVoucher({ voucher }) {
+  return (
+    <article className="user-voucher">
+      <strong>{yuan(voucher.actualValue)}</strong>
+      <span>{voucher.title || `优惠券 ${voucher.id || voucher.voucherId}`}</span>
+      <small>{voucher.shopName || `商户 ${voucher.shopId || '-'}`}</small>
+    </article>
+  )
+}
+
+function DetailSection({ title, children }) {
+  return (
+    <section className="detail-section">
+      <h3>{title}</h3>
+      {children}
+    </section>
+  )
+}
+
+function LoginDialog({ open, email, code, countdown, busy, setEmail, setCode, onSendCode, onLogin, onClose }) {
+  if (!open) return null
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section className="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭登录">×</button>
+        <p className="eyebrow">账号登录</p>
+        <h2 id="login-title">登录后参与秒杀、查看用户详情和同步 AI 记忆</h2>
+        <form className="login-form" onSubmit={onLogin}>
+          <label>邮箱<input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="请输入邮箱" /></label>
+          <label>
+            验证码
+            <div className="code-field">
+              <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="6 位验证码" />
+              <button type="button" onClick={onSendCode} disabled={busy || countdown > 0}>{countdown > 0 ? `${countdown}s` : '获取'}</button>
+            </div>
+          </label>
+          <button type="submit" className="primary-action" disabled={busy}>{busy ? '处理中...' : '登录'}</button>
+        </form>
+      </section>
+    </div>
+  )
+}
+
+function AiChatWidget({ open, onToggle, messages, input, setInput, loading, selectedBusiness, onOpenBusiness, onSubmit }) {
+  const messageListRef = useRef(null)
+  useEffect(() => {
+    if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight
+  }, [messages, loading, open])
+  return (
+    <aside className="ai-chat-widget" aria-label="AI 助手">
+      {open && (
+        <section className="ai-chat-panel">
+          <header className="ai-chat-header">
+            <div><p className="eyebrow">Spot AI</p><h2>本地生活助手</h2></div>
+            <button type="button" className="ai-icon-button" onClick={onToggle} aria-label="关闭 AI 助手">×</button>
+          </header>
+          <div className="ai-chat-context">当前店铺：{selectedBusiness?.name || '无'}</div>
+          <div className="ai-chat-messages" ref={messageListRef}>
+            {messages.map((message, index) => (
+              <article key={`${message.role}-${index}-${message.generatedAt}`} className={`ai-message ${message.role === 'user' ? 'user' : 'assistant'} ${message.error ? 'error' : ''}`}>
+                <span>{message.role === 'user' ? '你' : 'AI'}</span>
+                {message.role === 'user' ? <p>{message.content}</p> : <AiMarkdown content={message.content} onOpenBusiness={onOpenBusiness} />}
+                {message.memoryUpdated && <small className="memory-pill">已更新偏好</small>}
+              </article>
+            ))}
+            {loading && <article className="ai-message assistant"><span>AI</span><div className="ai-markdown"><p>正在查询商家和评价数据...</p></div></article>}
+          </div>
+          <form className="ai-chat-form" onSubmit={onSubmit}>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="问问附近哪家店适合你..."
+              rows={2}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  onSubmit(event)
+                }
+              }}
+            />
+            <button type="submit" disabled={loading || !input.trim()}>{loading ? '发送中' : '发送'}</button>
+          </form>
+        </section>
+      )}
+      <button type="button" className="ai-fab" onClick={onToggle} aria-expanded={open}>AI</button>
+    </aside>
+  )
+}
+
+function AiMarkdown({ content, onOpenBusiness }) {
+  const html = useMemo(() => {
+    if (!content) return ''
+    return marked.parse(content, { breaks: true, gfm: true })
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')
+  }, [content])
+  function handleClick(event) {
+    const link = event.target.closest?.('a')
+    if (!link) return
+    const href = link.getAttribute('href') || ''
+    const match = href.match(/^spotai:\/\/shop\/(\d+)$/)
+    if (!match) return
+    event.preventDefault()
+    onOpenBusiness?.(match[1])
+  }
+  return <div className="ai-markdown" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+function LoadingSkeleton() {
+  return (
+    <section className="skeleton-list" aria-busy="true" aria-label="正在加载">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <article className="business-card skeleton-card" key={index}>
+          <span className="skeleton-image" />
+          <div><span className="skeleton-line short" /><span className="skeleton-line long" /><span className="skeleton-line" /><span className="skeleton-line medium" /></div>
+        </article>
+      ))}
+    </section>
+  )
+}
+
+function EmptyState({ title, text, action, onAction }) {
+  return <section className="state-card" role="status"><strong>{title}</strong><p>{text}</p>{action && <button type="button" onClick={onAction}>{action}</button>}</section>
+}
+
+function ErrorState({ message, onRetry }) {
+  return <section className="state-card error-state" role="alert"><strong>数据加载失败</strong><p>{message || '网络开小差了，请稍后再试。'}</p><button type="button" onClick={onRetry}>重新加载</button></section>
 }
 
 function stars(score) {
-  const value = Math.max(0, Math.min(5, Number(score || 0)))
+  const value = Math.max(0, Math.min(5, Math.round(Number(score || 0))))
   return '★★★★★'.slice(0, value) + '☆☆☆☆☆'.slice(0, 5 - value)
 }
 
+function normalizeShop(shop) {
+  const fallback = mockBusinesses[Math.abs(Number(shop.id || 0)) % mockBusinesses.length]
+  const rawScore = shop.score === null || shop.score === undefined ? fallback.rating : Number(shop.score)
+  const score = rawScore > 5 ? rawScore / 10 : rawScore
+  return {
+    id: shop.id,
+    name: repairText(shop.name) || fallback.name,
+    category: repairText(shop.typeName || shop.category) || fallback.category,
+    categoryId: shop.typeId ? `server:${shop.typeId}` : fallback.categoryId,
+    district: repairText(shop.area) || fallback.district,
+    address: repairText(shop.address) || fallback.address,
+    distance: shop.distance === null || shop.distance === undefined ? fallback.distance : Number(Number(shop.distance).toFixed(1)),
+    rating: Number(Number(score).toFixed(1)),
+    reviews: shop.comments || fallback.reviews,
+    avgPrice: shop.avgPrice || fallback.avgPrice,
+    sold: shop.sold || fallback.sold,
+    image: normalizeImage(shop.images, repairText(shop.name) || fallback.name) || fallback.image,
+    deals: fallback.deals,
+    summary: repairText(shop.introduction) || fallback.summary,
+    reason: score >= 4.7 ? '高分好店' : fallback.reason,
+    tags: [repairText(shop.area), repairText(shop.typeName), ...fallback.tags].filter(Boolean).slice(0, 3),
+    hours: repairText(shop.openHours) || fallback.hours,
+    phone: repairText(shop.phone) || fallback.phone,
+    dishes: fallback.dishes
+  }
+}
+
+function normalizeBlog(blog) {
+  const content = richTextToPlainText(repairText(blog.content || blog.summary || ''))
+  const images = normalizeImages(blog.images || blog.image, repairText(blog.title || '探店'))
+  return {
+    id: blog.id,
+    title: repairText(blog.title) || '探店笔记',
+    content,
+    fullContent: content,
+    excerpt: content.length > 140 ? `${content.slice(0, 140)}...` : content,
+    image: images[0],
+    images,
+    author: repairText(blog.name || blog.author || blog.userName) || `用户 ${blog.userId || ''}`,
+    userId: blog.userId,
+    isFollow: Boolean(blog.isFollow),
+    liked: blog.liked || 0
+  }
+}
+
+function normalizeVoucher(voucher) {
+  return {
+    ...voucher,
+    title: repairText(voucher.title),
+    subTitle: repairText(voucher.subTitle),
+    rules: repairText(voucher.rules),
+    shopName: repairText(voucher.shopName)
+  }
+}
+
+function normalizeReview(review) {
+  const score = review.score === null || review.score === undefined ? 5 : Number(review.score)
+  const normalizedScore = score > 5 ? score / 10 : score
+  return {
+    id: review.id,
+    userName: repairText(review.userName) || '匿名用户',
+    userIcon: normalizeImage(review.userIcon, repairText(review.userName || '用户')),
+    score: normalizedScore,
+    content: repairText(richTextToPlainText(review.content || '')),
+    liked: review.liked || 0,
+    images: Array.isArray(review.images)
+      ? review.images.map((image, index) => normalizeImage(image, `评价${index + 1}`))
+      : String(review.images || '').split(',').filter(Boolean).map((image, index) => normalizeImage(image, `评价${index + 1}`)),
+    createTime: timeText(review.createTime).replace('长期有效', '')
+  }
+}
+
+function mergeById(current, next) {
+  const seen = new Set(current.map((item) => String(item.id)))
+  return [...current, ...next.filter((item) => {
+    const key = String(item.id)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })]
+}
+
+function repairText(value) {
+  if (value === null || value === undefined) return ''
+  const text = String(value)
+  if (!/[ÃÂäåçéèæ]/.test(text)) return text
+  try {
+    const bytes = Uint8Array.from(Array.from(text).map((char) => char.charCodeAt(0) & 0xff))
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  } catch {
+    return text
+  }
+}
+
 function richTextToPlainText(value) {
-  if (!value) return ''
-  return String(value)
+  return String(value || '')
     .replace(/<\s*br\s*\/?\s*>/gi, '\n')
     .replace(/<\/\s*(p|div|section|article|li|h[1-6])\s*>/gi, '\n')
     .replace(/<[^>]+>/g, '')
@@ -99,2012 +2068,57 @@ function richTextToPlainText(value) {
     .trim()
 }
 
-function normalizeImage(images) {
-  if (!images) return ''
-  return String(images).split(',')[0].trim()
+function normalizeImage(images, label = '店铺') {
+  const value = String(images || '').split(',')[0]?.trim()
+  if (!value || value.startsWith('/imgs/')) return imageFallback(label)
+  return value.replace(/\\/g, '/')
 }
 
-function imageList(images) {
-  if (!images) return []
-  return String(images).split(',').map((item) => item.trim()).filter(Boolean)
+function normalizeImages(images, label = '图片') {
+  const list = String(images || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => normalizeImage(item, label))
+  return list.length > 0 ? list : [imageFallback(label)]
 }
 
-function uniqueShops(items) {
-  const seen = new Set()
-  return (items || []).filter((shop) => {
-    const key = shop.name
-      ? `${shop.name}|${shop.area || ''}|${shop.address || ''}`.replace(/\s+/g, '')
-      : shop.id
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+function imageCsvToList(images) {
+  return String(images || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
-function App() {
-  const [activeTab, setActiveTab] = useState('home')
-  const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
-  const [globalSearch, setGlobalSearch] = useState('')
-  const [countdown, setCountdown] = useState(0)
-  const [user, setUser] = useState(null)
-  const [toast, setToast] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [categories, setCategories] = useState([])
-  const [typeId, setTypeId] = useState(1)
-  const [shops, setShops] = useState([])
-  const [shopLoading, setShopLoading] = useState(false)
-  const [shopSearchTitle, setShopSearchTitle] = useState('')
-  const [selectedShop, setSelectedShop] = useState(null)
-  const [shopReviews, setShopReviews] = useState([])
-  const [reviewPage, setReviewPage] = useState(1)
-  const [reviewHasMore, setReviewHasMore] = useState(false)
-  const [reviewLoading, setReviewLoading] = useState(false)
-  const [reviewSummary, setReviewSummary] = useState(null)
-  const [reviewSummaryLoading, setReviewSummaryLoading] = useState(false)
-  const [shopDetailLoading, setShopDetailLoading] = useState(false)
-  const [blogs, setBlogs] = useState([])
-  const [feed, setFeed] = useState([])
-  const [blogLoading, setBlogLoading] = useState(false)
-  const [blogPage, setBlogPage] = useState(1)
-  const [blogHasMore, setBlogHasMore] = useState(false)
-  const [selectedBlog, setSelectedBlog] = useState(null)
-  const [blogDetailLoading, setBlogDetailLoading] = useState(false)
-  const [composeOpen, setComposeOpen] = useState(false)
-  const [composeShopKeyword, setComposeShopKeyword] = useState('')
-  const [composeShopResults, setComposeShopResults] = useState([])
-  const [selectedComposeShop, setSelectedComposeShop] = useState(null)
-  const [imageUploading, setImageUploading] = useState(false)
-  const [signDays, setSignDays] = useState(null)
-  const [siteUv, setSiteUv] = useState(null)
-  const [shopUv, setShopUv] = useState(null)
-  const [profileData, setProfileData] = useState(null)
-  const [profileLoading, setProfileLoading] = useState(false)
-  const [profilePanel, setProfilePanel] = useState('notes')
-  const [blogForm, setBlogForm] = useState({
-    shopId: '1',
-    title: '',
-    images: '',
-    content: ''
-  })
-  const [voucherActivities, setVoucherActivities] = useState([])
-  const [voucherLoading, setVoucherLoading] = useState(false)
-  const [voucherBusyId, setVoucherBusyId] = useState(null)
-  const [aiChatOpen, setAiChatOpen] = useState(false)
-  const [aiChatInput, setAiChatInput] = useState('')
-  const [aiChatMessages, setAiChatMessages] = useState([
-    {
-      role: 'assistant',
-      content: '你好，我是 Spot AI 助手。可以帮你理解店铺、评价和优惠信息。',
-      generatedAt: new Date().toISOString()
-    }
-  ])
-  const [aiChatLoading, setAiChatLoading] = useState(false)
-
-  const loggedIn = Boolean(user)
-
-  useEffect(() => {
-    ensureVisitor()
-    hydrateUser()
-    loadCategories()
-    loadShops(1)
-    loadBlogs()
-    loadVoucherActivities()
-    recordUv('site')
-  }, [])
-
-  useEffect(() => {
-    if (countdown <= 0) return
-    const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000)
-    return () => window.clearTimeout(timer)
-  }, [countdown])
-
-  useEffect(() => {
-    loadShops(typeId)
-  }, [typeId])
-
-  async function hydrateUser() {
-    const token = localStorage.getItem(tokenKey)
-    if (!token) return
-    const body = await api('/user/me')
-    if (body.success) {
-      setUser(body.data)
-      loadSignCount()
-      loadProfile()
-      loadBlogs(1)
-      loadFeed()
-    } else {
-      localStorage.removeItem(tokenKey)
-    }
-  }
-
-  async function loadCategories() {
-    const body = await api('/shop-type/list')
-    if (body.success && Array.isArray(body.data) && body.data.length > 0) {
-      setCategories(body.data.map((item) => ({
-        ...item,
-        tone: item.name?.slice(0, 1) || '类'
-      })))
-      return
-    }
-    setCategories([])
-    if (!body.success) setToast(body.errorMsg || '商户分类加载失败')
-  }
-
-  async function sendCode() {
-    if (!emailPattern.test(email)) {
-      setToast('请输入正确的邮箱地址')
-      return
-    }
-    if (countdown > 0) return
-    setBusy(true)
-    const body = await api(`/user/code?${new URLSearchParams({ email })}`, { method: 'POST' })
-    setBusy(false)
-    if (!body.success) {
-      setToast(body.errorMsg || '验证码发送失败')
-      return
-    }
-    setCountdown(60)
-    setToast('验证码已发送，请查看邮箱')
-  }
-
-  async function login(event) {
-    event.preventDefault()
-    if (!emailPattern.test(email)) {
-      setToast('请输入正确的邮箱地址')
-      return
-    }
-    if (!/^\d{6}$/.test(code)) {
-      setToast('请输入 6 位验证码')
-      return
-    }
-    setBusy(true)
-    const body = await api('/user/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, code })
-    })
-    setBusy(false)
-    if (!body.success) {
-      setToast(body.errorMsg || '登录失败')
-      return
-    }
-    localStorage.setItem(tokenKey, body.data)
-    setToast('登录成功')
-    await hydrateUser()
-    loadBlogs(1)
-    loadProfile()
-  }
-
-  function logout() {
-    localStorage.removeItem(tokenKey)
-    setUser(null)
-    setSignDays(null)
-    setFeed([])
-    setProfileData(null)
-    setToast('已退出登录')
-  }
-
-  async function loadShops(nextTypeId = typeId) {
-    setShopLoading(true)
-    setShopSearchTitle('')
-    const params = new URLSearchParams({
-      typeId: String(nextTypeId),
-      current: '1',
-      x: userLocation.x,
-      y: userLocation.y
-    })
-    const body = await api(`/shop/of/type?${params}`)
-    setShopLoading(false)
-    if (body.success && Array.isArray(body.data)) {
-      setShops(body.data)
-      setSelectedShop(body.data[0] || null)
-      return
-    }
-    setShops([])
-    setSelectedShop(null)
-    setToast(body.errorMsg || '商户接口暂不可用')
-  }
-
-  async function searchShopByKeyword(keyword, { forCompose = false } = {}) {
-    const value = keyword.trim()
-    if (!value) {
-      if (forCompose) setComposeShopResults([])
-      return []
-    }
-    const body = await api(`/shop/search?${new URLSearchParams({ keyword: value })}`)
-    if (!body.success) {
-      setToast(body.errorMsg || '商户搜索失败')
-      if (forCompose) setComposeShopResults([])
-      return []
-    }
-    const result = uniqueShops(Array.isArray(body.data) ? body.data : [])
-    if (forCompose) setComposeShopResults(result)
-    return result
-  }
-
-  async function handleGlobalSearch(event) {
-    event.preventDefault()
-    const value = globalSearch.trim()
-    if (!value) {
-      setToast('请输入要搜索的商户名称或地址')
-      return
-    }
-    setShopLoading(true)
-    const result = await searchShopByKeyword(value)
-    setShopLoading(false)
-    setShops(result)
-    setSelectedShop(result[0] || null)
-    setShopSearchTitle(`搜索“${value}”`)
-    setActiveTab('shops')
-    setToast(result.length > 0 ? `找到 ${result.length} 家相关商户` : '没有找到相关商户')
-  }
-
-  async function loadShopDetail(shopOrId) {
-    const summary = typeof shopOrId === 'object' ? shopOrId : null
-    const id = summary?.id || shopOrId
-    setShopDetailLoading(true)
-    setReviewSummary(null)
-    if (summary) {
-      setSelectedShop(summary)
-    }
-    setActiveTab('shopDetail')
-    const body = await api(`/shop/${id}`)
-    if (body.success) {
-      setSelectedShop({
-        ...body.data,
-        distance: summary?.distance ?? body.data.distance
-      })
-      recordUv('shop', id)
-    } else {
-      setToast(body.errorMsg || '商户详情加载失败')
-    }
-    await Promise.all([
-      loadShopReviews(id, 1, false),
-      loadReviewSummary(id)
-    ])
-    setShopDetailLoading(false)
-  }
-
-  async function loadReviewSummary(shopId) {
-    setReviewSummaryLoading(true)
-    const body = await api(`/review/summary?${new URLSearchParams({ shopId: String(shopId) })}`)
-    setReviewSummaryLoading(false)
-    if (body.success && body.data) {
-      setReviewSummary(body.data)
-      return
-    }
-    setReviewSummary({
-      status: 'UNAVAILABLE',
-      message: body.errorMsg || 'AI 总结暂不可用'
-    })
-  }
-
-  async function sendAiChatMessage(event) {
-    event?.preventDefault()
-    const message = aiChatInput.trim()
-    if (!message || aiChatLoading) return
-
-    const userMessage = {
-      role: 'user',
-      content: message,
-      generatedAt: new Date().toISOString()
-    }
-    const nextMessages = [...aiChatMessages, userMessage]
-    setAiChatMessages(nextMessages)
-    setAiChatInput('')
-    setAiChatLoading(true)
-
-    const history = aiChatMessages
-      .slice(-8)
-      .map(({ role, content }) => ({ role, content }))
-
-    const body = await api('/ai/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        route: 'CHAT',
-        shopId: selectedShop?.id || null,
-        message,
-        history
-      })
-    })
-
-    setAiChatLoading(false)
-    if (body.success && body.data?.answer) {
-      setAiChatMessages((items) => [
-        ...items,
-        {
-          role: 'assistant',
-          content: body.data.answer,
-          generatedAt: body.data.generatedAt,
-          agentRoute: body.data.agentRoute,
-          memoryUpdated: Boolean(body.data.memoryUpdated),
-          memories: Array.isArray(body.data.memories) ? body.data.memories : []
-        }
-      ])
-      return
-    }
-    setAiChatMessages((items) => [
-      ...items,
-      {
-        role: 'assistant',
-        content: body.errorMsg || 'AI 助手暂不可用，请稍后再试。',
-        generatedAt: new Date().toISOString(),
-        error: true
-      }
-    ])
-  }
-
-  async function loadShopReviews(shopId, page = 1, append = false) {
-    setReviewLoading(true)
-    const body = await api(`/review/of/shop?${new URLSearchParams({ id: String(shopId), current: String(page) })}`)
-    setReviewLoading(false)
-    const pageData = body.data
-    if (body.success && Array.isArray(pageData?.list)) {
-      setShopReviews((items) => append ? [...items, ...pageData.list] : pageData.list)
-      setReviewPage(pageData.current || page)
-      setReviewHasMore(Boolean(pageData.hasMore))
-      return
-    }
-    if (!append) setShopReviews([])
-    setReviewHasMore(false)
-    if (!body.success) setToast(body.errorMsg || '店铺评价加载失败')
-  }
-
-  async function warmGeo() {
-    const body = await api('/shop/geo/load', { method: 'PUT' })
-    setToast(body.success ? '附近商户坐标已重新加载' : body.errorMsg || 'GEO 加载失败')
-  }
-
-  async function loadBlogs(page = 1, append = false) {
-    setBlogLoading(true)
-    const body = await api(`/blog/hot?current=${page}`)
-    setBlogLoading(false)
-    if (body.success && Array.isArray(body.data)) {
-      setBlogs((items) => append ? [...items, ...body.data] : body.data)
-      setBlogPage(page)
-      setBlogHasMore(body.data.length >= 10)
-      return
-    }
-    if (!append) setBlogs([])
-    setBlogHasMore(false)
-    if (!body.success) setToast(body.errorMsg || '探店笔记加载失败')
-  }
-
-  async function loadFeed() {
-    if (!localStorage.getItem(tokenKey)) {
-      setToast('登录后才能查看关注流')
-      setActiveTab('login')
-      return
-    }
-    const body = await api(`/blog/of/follow?${new URLSearchParams({ lastId: String(Date.now()), offset: '0' })}`)
-    if (body.success) {
-      setFeed(body.data?.list || [])
-    } else {
-      setToast(body.errorMsg || '关注流加载失败')
-    }
-  }
-
-  async function loadProfile() {
-    if (!localStorage.getItem(tokenKey)) return
-    setProfileLoading(true)
-    const body = await api('/user/profile')
-    setProfileLoading(false)
-    if (body.success) {
-      setProfileData(body.data)
-      if (body.data?.signDays !== undefined) setSignDays(body.data.signDays)
-    } else if (body.errorMsg) {
-      setToast(body.errorMsg)
-    }
-  }
-
-  async function openBlogDetail(blog) {
-    setSelectedBlog(blog)
-    setBlogDetailLoading(true)
-    const body = await api(`/blog/${blog.id}`)
-    setBlogDetailLoading(false)
-    if (body.success) {
-      setSelectedBlog(body.data)
-      recordUv('blog', blog.id)
-    } else {
-      setToast(body.errorMsg || '探店笔记详情加载失败')
-    }
-  }
-
-  function openComposeBlog() {
-    if (!loggedIn) {
-      setToast('登录后才能发布探店笔记')
-      setActiveTab('login')
-      return
-    }
-    setActiveTab('composeBlog')
-  }
-
-  async function searchComposeShop(event) {
-    event.preventDefault()
-    await searchShopByKeyword(composeShopKeyword, { forCompose: true })
-  }
-
-  function selectComposeShop(shop) {
-    setSelectedComposeShop(shop)
-    setComposeShopKeyword(shop.name)
-    setBlogForm((form) => ({ ...form, shopId: String(shop.id) }))
-  }
-
-  async function uploadBlogImages(files) {
-    const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith('image/'))
-    if (imageFiles.length === 0) {
-      setToast('请选择图片文件')
-      return
-    }
-    if (!loggedIn) {
-      setToast('登录后才能上传图片')
-      setActiveTab('login')
-      return
-    }
-    setImageUploading(true)
-    const uploaded = []
-    try {
-      for (const file of imageFiles.slice(0, 9)) {
-        const formData = new FormData()
-        formData.append('file', file)
-        const body = await api('/upload/blog', { method: 'POST', body: formData })
-        if (body.success && body.data?.url) {
-          uploaded.push(body.data.url)
-        } else {
-          setToast(body.errorMsg || `${file.name} 上传失败，请确认 MinIO 和后端服务正常`)
-          break
-        }
-      }
-      if (uploaded.length > 0) {
-        setBlogForm((form) => {
-          const existing = form.images ? form.images.split(',').map((item) => item.trim()).filter(Boolean) : []
-          return { ...form, images: [...existing, ...uploaded].join(',') }
-        })
-        setToast(`已上传 ${uploaded.length} 张图片`)
-      }
-    } catch {
-      setToast('图片上传失败，请确认后端和 MinIO 已启动')
-    } finally {
-      setImageUploading(false)
-    }
-  }
-
-  function removeBlogImage(url) {
-    setBlogForm((form) => ({
-      ...form,
-      images: form.images
-        .split(',')
-        .map((item) => item.trim())
-        .filter((item) => item && item !== url)
-        .join(',')
-    }))
-  }
-
-  async function publishBlog(event) {
-    event?.preventDefault()
-    if (!loggedIn) {
-      setToast('登录后才能发布探店笔记')
-      setActiveTab('login')
-      return
-    }
-    const payload = {
-      shopId: Number(blogForm.shopId),
-      title: blogForm.title.trim(),
-      images: blogForm.images.trim(),
-      content: blogForm.content.trim()
-    }
-    if (!payload.shopId || !payload.title || !payload.content) {
-      setToast('请选择店铺，并填写标题和正文')
-      return
-    }
-    const body = await api('/blog', { method: 'POST', body: JSON.stringify(payload) })
-    if (body.success) {
-      setToast(`发布成功，笔记 ID：${body.data}`)
-      setBlogForm({ shopId: '1', title: '', images: '', content: '' })
-      setSelectedComposeShop(null)
-      setComposeShopKeyword('')
-      setComposeShopResults([])
-      setComposeOpen(false)
-      setActiveTab('blogs')
-      loadBlogs(1)
-    } else {
-      setToast(body.errorMsg || '发布失败')
-    }
-  }
-
-  async function likeBlog(id) {
-    if (!loggedIn) {
-      setToast('登录后才能点赞')
-      setActiveTab('login')
-      return
-    }
-    const body = await api(`/blog/like/${id}`, { method: 'PUT' })
-    if (body.success) {
-      const updateLiked = (item) => (
-        item.id === id
-          ? { ...item, isLike: !item.isLike, liked: Number(item.liked || 0) + (item.isLike ? -1 : 1) }
-          : item
-      )
-      setBlogs((items) => items.map((item) => (
-        updateLiked(item)
-      )))
-      setFeed((items) => items.map(updateLiked))
-      setSelectedBlog((item) => item?.id === id ? updateLiked(item) : item)
-      loadProfile()
-    } else {
-      setToast(body.errorMsg || '操作失败')
-    }
-  }
-
-  async function followAuthor(blog) {
-    if (!loggedIn) {
-      setToast('登录后才能关注')
-      setActiveTab('login')
-      return
-    }
-    const userId = blog?.userId
-    if (!userId || String(userId) === String(user?.id)) {
-      setToast('这是你自己的笔记')
-      return
-    }
-    const nextFollow = !blog.isFollow
-    const body = await api(`/follow/${userId}/${nextFollow}`, { method: 'PUT' })
-    if (body.success) {
-      const updateFollow = (item) => (
-        String(item.userId) === String(userId) ? { ...item, isFollow: nextFollow } : item
-      )
-      setBlogs((items) => items.map(updateFollow))
-      setFeed((items) => items.map(updateFollow))
-      setSelectedBlog((item) => item && String(item.userId) === String(userId) ? updateFollow(item) : item)
-      setProfileData((data) => data ? {
-        ...data,
-        followCount: Math.max(0, Number(data.followCount || 0) + (nextFollow ? 1 : -1)),
-        myBlogs: (data.myBlogs || []).map(updateFollow),
-        likedBlogs: (data.likedBlogs || []).map(updateFollow)
-      } : data)
-      if (nextFollow) loadFeed()
-    }
-    setToast(body.success ? (nextFollow ? '已关注作者' : '已取消关注') : body.errorMsg || '关注失败')
-  }
-
-  async function signToday() {
-    if (!loggedIn) {
-      setToast('登录后才能签到')
-      setActiveTab('login')
-      return
-    }
-    const body = await api('/user/sign', { method: 'POST' })
-    setToast(body.success ? '签到成功' : body.errorMsg || '签到失败')
-    loadSignCount()
-    loadProfile()
-  }
-
-  async function loadSignCount() {
-    const body = await api('/user/sign/count')
-    if (body.success) setSignDays(body.data)
-  }
-
-  async function recordUv(targetType, targetId) {
-    const body = await api('/stats/uv', {
-      method: 'POST',
-      body: JSON.stringify({ targetType, targetId, visitor: ensureVisitor() })
-    })
-    if (!body.success && targetType !== 'site') setToast(body.errorMsg || 'UV 璁板綍澶辫触')
-  }
-
-  async function loadStats() {
-    const today = new Date().toISOString().slice(0, 10)
-    const site = await api(`/stats/uv/site?date=${today}`)
-    const shop = selectedShop?.id ? await api(`/stats/uv/shop/${selectedShop.id}?date=${today}`) : null
-    if (site.success) setSiteUv(site.data)
-    if (shop?.success) setShopUv(shop.data)
-  }
-
-  async function loadVoucherActivities() {
-    setVoucherLoading(true)
-    const body = await api('/voucher/activities')
-    setVoucherLoading(false)
-    if (body.success && Array.isArray(body.data)) {
-      setVoucherActivities(body.data)
-      return
-    }
-    setVoucherActivities([])
-    setToast(body.errorMsg || '优惠活动加载失败')
-  }
-
-  async function claimVoucher(activity) {
-    if (!loggedIn) {
-      setToast('登录后才能参与活动')
-      setActiveTab('login')
-      return
-    }
-    if (activity.type === 1 && activity.activityStatus !== 'ACTIVE') {
-      setToast(activity.activityStatus === 'UPCOMING' ? '活动还未开始' : '当前不可抢购')
-      return
-    }
-    setVoucherBusyId(activity.id)
-    const path = activity.type === 1
-      ? `/voucher-order/seckill/${activity.id}`
-      : `/voucher-order/${activity.id}`
-    const body = await api(path, { method: 'POST' })
-    setVoucherBusyId(null)
-    if (body.success) {
-      setToast(activity.type === 1 ? `秒杀已受理，订单 ID：${body.data}` : `领取成功，订单 ID：${body.data}`)
-      loadVoucherActivities()
-    } else {
-      setToast(body.errorMsg || '参与失败')
-    }
-  }
-
-  const topBlogs = useMemo(() => blogs.slice(0, 3), [blogs])
-
-  return (
-    <div className="app">
-      <header className="topbar">
-        <button className="brand-button" onClick={() => setActiveTab('home')} aria-label="返回首页">
-          <span className="brand-mark">S</span>
-          <span>
-            <strong>Spot AI</strong>
-            <small>本地生活点评</small>
-          </span>
-        </button>
-        <form className="search-box" onSubmit={handleGlobalSearch}>
-          <input
-            value={globalSearch}
-            onChange={(event) => setGlobalSearch(event.target.value)}
-            aria-label="搜索商户"
-            placeholder="搜索商户名称、商圈或地址"
-          />
-          <button type="submit" aria-label="搜索">
-            <span className="search-icon" aria-hidden="true" />
-          </button>
-        </form>
-        <nav className="desktop-nav" aria-label="主导航">
-          {[
-            ['home', '首页'],
-            ['shops', '附近'],
-            ['blogs', '探店'],
-            ['deals', '优惠'],
-            ['profile', '我的']
-          ].map(([key, label]) => (
-            <button key={key} className={activeTab === key ? 'nav-active' : ''} onClick={() => {
-              setActiveTab(key)
-              if (key === 'profile') {
-                loadStats()
-                loadProfile()
-                if (localStorage.getItem(tokenKey)) loadFeed()
-              }
-              if (key === 'blogs') loadBlogs()
-              if (key === 'deals') loadVoucherActivities()
-            }}>
-              {label}
-            </button>
-          ))}
-        </nav>
-      </header>
-
-      <main>
-        {activeTab === 'home' && (
-          <HomePage
-            user={user}
-            categories={categories}
-            shops={shops}
-            blogs={topBlogs}
-            signDays={signDays}
-            onCategory={(id) => {
-              setTypeId(id)
-              setActiveTab('shops')
-            }}
-            onOpenShop={(shop) => {
-              loadShopDetail(shop)
-            }}
-            onSign={signToday}
-            onLogin={() => setActiveTab('login')}
-          />
-        )}
-
-        {activeTab === 'login' && (
-          <LoginPage
-            email={email}
-            code={code}
-            countdown={countdown}
-            busy={busy}
-            user={user}
-            setEmail={setEmail}
-            setCode={setCode}
-            onSendCode={sendCode}
-            onLogin={login}
-            onLogout={logout}
-          />
-        )}
-
-        {activeTab === 'shops' && (
-          <ShopPage
-            categories={categories}
-            typeId={typeId}
-            setTypeId={setTypeId}
-            shops={shops}
-            loading={shopLoading}
-            selectedShop={selectedShop}
-            searchTitle={shopSearchTitle}
-            onOpenShop={loadShopDetail}
-            userLocation={userLocation}
-          />
-        )}
-
-        {activeTab === 'shopDetail' && (
-          <ShopDetailPage
-            shop={selectedShop}
-            reviews={shopReviews}
-            reviewSummary={reviewSummary}
-            loading={shopDetailLoading}
-            reviewLoading={reviewLoading}
-            reviewSummaryLoading={reviewSummaryLoading}
-            reviewHasMore={reviewHasMore}
-            onBack={() => setActiveTab('shops')}
-            onLoadMoreReviews={() => selectedShop && loadShopReviews(selectedShop.id, reviewPage + 1, true)}
-          />
-        )}
-
-        {activeTab === 'blogs' && (
-          <BlogPage
-            user={user}
-            blogs={blogs}
-            loading={blogLoading}
-            loggedIn={loggedIn}
-            hasMore={blogHasMore}
-            detailLoading={blogDetailLoading}
-            selectedBlog={selectedBlog}
-            onLike={likeBlog}
-            onFollow={followAuthor}
-            onLoadMore={() => loadBlogs(blogPage + 1, true)}
-            onOpenBlog={openBlogDetail}
-            onCloseBlog={() => setSelectedBlog(null)}
-            onOpenCompose={openComposeBlog}
-          />
-        )}
-
-        {activeTab === 'composeBlog' && (
-          <ComposeBlogPage
-            form={blogForm}
-            setForm={setBlogForm}
-            shopKeyword={composeShopKeyword}
-            setShopKeyword={setComposeShopKeyword}
-            shopResults={composeShopResults}
-            selectedShop={selectedComposeShop}
-            uploading={imageUploading}
-            onSearchShop={searchComposeShop}
-            onSelectShop={selectComposeShop}
-            onUploadImages={uploadBlogImages}
-            onRemoveImage={removeBlogImage}
-            onPublish={publishBlog}
-            onBack={() => setActiveTab('blogs')}
-          />
-        )}
-
-        {activeTab === 'deals' && (
-          <DealPage
-            activities={voucherActivities}
-            loading={voucherLoading}
-            busyId={voucherBusyId}
-            loggedIn={loggedIn}
-            onRefresh={loadVoucherActivities}
-            onClaim={claimVoucher}
-            onLogin={() => setActiveTab('login')}
-          />
-        )}
-
-        {activeTab === 'profile' && (
-          <ProfilePage
-            user={user}
-            signDays={signDays}
-            siteUv={siteUv}
-            shopUv={shopUv}
-            profileData={profileData}
-            profileLoading={profileLoading}
-            profilePanel={profilePanel}
-            feed={feed}
-            selectedShop={selectedShop}
-            onSign={signToday}
-            onPanel={setProfilePanel}
-            onRefreshProfile={() => {
-              loadProfile()
-              loadFeed()
-            }}
-            onRefreshStats={loadStats}
-            onOpenBlog={openBlogDetail}
-            onLike={likeBlog}
-            onFollow={followAuthor}
-            onLogin={() => setActiveTab('login')}
-            onLogout={logout}
-          />
-        )}
-      </main>
-
-      <nav className="mobile-tabs" aria-label="底部导航">
-        {[
-          ['home', '首页'],
-          ['shops', '附近'],
-          ['blogs', '探店'],
-          ['composeBlog', '+'],
-          ['deals', '优惠'],
-          ['profile', '我的']
-        ].map(([key, label]) => (
-          <button key={key} className={activeTab === key ? 'nav-active' : ''} onClick={() => {
-            if (key === 'composeBlog') {
-              openComposeBlog()
-              return
-            }
-            setActiveTab(key)
-            if (key === 'deals') loadVoucherActivities()
-            if (key === 'profile') {
-              loadStats()
-              loadProfile()
-              if (localStorage.getItem(tokenKey)) loadFeed()
-            }
-          }}>
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {toast && (
-        <div className="toast" role="status">
-          <span>{toast}</span>
-          <button onClick={() => setToast('')} aria-label="关闭提示">关闭</button>
-        </div>
-      )}
-
-     <AiChatWidget
-        activeTab={activeTab}
-        open={aiChatOpen}
-        onToggle={() => setAiChatOpen((value) => !value)}
-        messages={aiChatMessages}
-        input={aiChatInput}
-        setInput={setAiChatInput}
-        loading={aiChatLoading}
-        selectedShop={selectedShop}
-        onSubmit={sendAiChatMessage}
-      />
-    </div>
-  )
+function mergeImageCsv(current, nextUrls) {
+  return mergeImageList(imageCsvToList(current), nextUrls)
 }
 
-function AiChatWidget({ activeTab, open, onToggle, messages, input, setInput, loading, selectedShop, onSubmit }) {
-  const messageListRef = useRef(null)
-
-  useEffect(() => {
-    if (messageListRef.current) {
-      messageListRef.current.scrollTop = messageListRef.current.scrollHeight
-    }
-  }, [messages])
-
-  return (
-    <aside className={open ? 'ai-chat-widget open' : 'ai-chat-widget'} aria-label="Spot AI 对话助手">
-      {open && (
-        <section className="ai-chat-panel" aria-labelledby="ai-chat-title">
-          <header className="ai-chat-header">
-            <div>
-              <p className="eyebrow">Spot AI</p>
-              <h2 id="ai-chat-title">本地生活助手</h2>
-            </div>
-            <button type="button" className="ai-chat-icon-button" onClick={onToggle} aria-label="收起 AI 对话">
-              ×
-            </button>
-          </header>
-          <div className="ai-chat-context">
-            {activeTab === 'shopDetail' && selectedShop?.name ? `当前店铺：${selectedShop.name}` : '当前店铺：无'}
-          </div>
-          <div className="ai-chat-messages" role="log" aria-live="polite" aria-relevant="additions" ref={messageListRef}>
-            {messages.map((message, index) => (
-              <article
-                key={`${message.role}-${index}-${message.generatedAt || ''}`}
-                className={`ai-chat-message ${message.role === 'user' ? 'user' : 'assistant'} ${message.error ? 'error' : ''}`}
-              >
-                <span>{message.role === 'user' ? '你' : 'AI'}</span>
-                {message.role === 'user' ? <p>{message.content}</p> : <AiMarkdown content={message.content} />}
-                {message.role !== 'user' && (message.agentRoute || message.memoryUpdated) && (
-                  <div className="ai-chat-meta">
-                    {agentRouteText(message.agentRoute) && <small>{agentRouteText(message.agentRoute)}</small>}
-                    {message.memoryUpdated && <small>已更新偏好</small>}
-                  </div>
-                )}
-                {message.role !== 'user' && Array.isArray(message.memories) && message.memories.length > 0 && (
-                  <div className="ai-memory-tags" aria-label="本轮更新的偏好记忆">
-                    {message.memories.slice(0, 3).map((memory) => (
-                      <small key={`${memory.memoryKey}-${memory.summary}`}>
-                        {memoryLabel(memory.memoryKey)}
-                      </small>
-                    ))}
-                  </div>
-                )}
-              </article>
-            ))}
-            {loading && (
-              <article className="ai-chat-message assistant" aria-label="AI 正在回复">
-                <span>AI</span>
-                <div className="ai-markdown"><p>正在思考...</p></div>
-              </article>
-            )}
-          </div>
-          <form className="ai-chat-form" onSubmit={onSubmit}>
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              maxLength={1000}
-              rows={2}
-              placeholder="问问这家店适合什么场景..."
-              aria-label="输入 AI 对话内容"
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault()
-                  onSubmit(event)
-                }
-              }}
-            />
-            <button type="submit" className="primary" disabled={loading || !input.trim()}>
-              {loading ? '发送中' : '发送'}
-            </button>
-          </form>
-        </section>
-      )}
-      <button
-        type="button"
-        className="ai-chat-fab"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-label={open ? '收起 AI 对话' : '打开 AI 对话'}
-      >
-        AI
-      </button>
-    </aside>
-  )
+function mergeImageList(current, nextUrls) {
+  return [...new Set([...(current || []), ...(nextUrls || [])])].slice(0, 9)
 }
 
-function agentRouteText(route) {
-  const labels = {
-    SHOP_GUIDE: '找店',
-    REVIEW_RAG: '评价总结',
-    COUPON: '优惠查询',
-    ORDER_GUARD: '订单守护'
-  }
-  return labels[route] || 'Spot AI Agent'
+function imageFallback(label = '店铺') {
+  const text = String(label).slice(0, 4).replace(/[<>&'"]/g, '')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420"><rect width="640" height="420" fill="#fff0e2"/><circle cx="492" cy="102" r="58" fill="#ffb35c"/><path d="M0 326C128 248 216 294 318 220C426 142 512 184 640 96V420H0Z" fill="#ffd3ac"/><text x="320" y="226" text-anchor="middle" font-family="Arial,Microsoft YaHei,sans-serif" font-size="42" font-weight="800" fill="#9b4420">${text}</text></svg>`
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`
 }
 
-function memoryLabel(memoryKey) {
-  const labels = {
-    'dining.preference.taste': '口味偏好',
-    'dining.preference.environment': '环境偏好',
-    'dining.preference.budget': '预算偏好',
-    'dining.preference.area': '区域偏好',
-    'dining.preference.scene': '场景偏好',
-    'dining.preference.discount': '优惠偏好',
-    'dining.avoid.keyword': '避雷偏好'
-  }
-  return labels[memoryKey] || '偏好'
+function yuan(value) {
+  if (value === null || value === undefined || value === '') return '-'
+  return `¥${Math.round(Number(value) / 100)}`
 }
 
-function AiMarkdown({ content }) {
-  const html = useMemo(() => {
-    if (!content) return ''
-    const raw = marked.parse(content, { breaks: true, gfm: true })
-    return raw
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/on\w+\s*=\s*["\'][^"\']*["\']/gi, '')
-  }, [content])
-  return <div className="ai-markdown" dangerouslySetInnerHTML={{ __html: html }} />
+function timeText(value) {
+  if (!value) return '长期有效'
+  return String(value).replace('T', ' ').slice(0, 16)
 }
 
-function HomePage({ user, categories, shops, blogs, signDays, onCategory, onOpenShop, onSign, onLogin }) {
-  const heroImage = normalizeImage(shops[0]?.images)
-  return (
-    <div className="page-grid home-grid">
-      <section className="hero-band">
-        <div>
-          <p className="eyebrow">西安 · 本地数据库推荐</p>
-          <h1>发现附近值得去的好店</h1>
-          <p>查附近商户、写探店笔记、抢限时券、记录访问和签到，一套本地生活闭环。</p>
-          <div className="hero-actions">
-            <button className="primary" onClick={() => onCategory(1)}>看附近美食</button>
-            <button className="ghost" onClick={user ? onSign : onLogin}>{user ? '今日签到' : '登录体验'}</button>
-          </div>
-        </div>
-        <VisualPanel image={heroImage} title={shops[0]?.name || '本地数据库商户'} subtitle={shops[0]?.area || '等待商户数据'} />
-      </section>
-
-      <section className="category-strip" aria-label="商户分类">
-        {categories.length === 0 ? (
-          <div className="category-empty">暂无分类，请确认 `/shop-type/list` 可访问</div>
-        ) : categories.map((item) => (
-          <button key={item.id} onClick={() => onCategory(item.id)}>
-            <span>{item.tone}</span>
-            {item.name}
-          </button>
-        ))}
-      </section>
-
-      <section className="content-section">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">附近热店</p>
-            <h2>按距离和口碑筛选</h2>
-          </div>
-          <button className="text-button" onClick={() => onCategory(1)}>全部商户</button>
-        </div>
-        <div className="shop-list compact">
-          {shops.length === 0 ? (
-            <EmptyState title="暂无商户数据" text="请确认后端已启动，tb_shop 已导入西安商户，并刷新 Redis GEO。" />
-          ) : shops.slice(0, 3).map((shop) => (
-            <ShopCard key={shop.id} shop={shop} onOpen={() => onOpenShop(shop)} />
-          ))}
-        </div>
-      </section>
-
-      <aside className="side-rail">
-        <div className="status-panel">
-          <p className="eyebrow">我的状态</p>
-          <h2>{user ? user.nickName : '未登录'}</h2>
-          <p>{user ? `连续签到 ${signDays ?? 0} 天` : '登录后可签到、点赞、发布探店笔记'}</p>
-          <button className="primary wide" onClick={user ? onSign : onLogin}>{user ? '签到' : '登录 / 注册'}</button>
-        </div>
-        <div className="blog-mini-list">
-          <p className="eyebrow">正在热聊</p>
-          {blogs.length === 0 ? (
-            <article>
-              <strong>暂无探店笔记</strong>
-              <span>发布第一篇真实探店内容后会显示在这里</span>
-            </article>
-          ) : blogs.map((blog) => (
-            <article key={blog.id}>
-              <strong>{blog.title}</strong>
-              <span>{blog.liked || 0} 人点赞</span>
-            </article>
-          ))}
-        </div>
-      </aside>
-    </div>
-  )
-}
-
-function LoginPage({ email, code, countdown, busy, user, setEmail, setCode, onSendCode, onLogin, onLogout }) {
-  return (
-    <section className="auth-layout">
-      <div className="auth-copy">
-        <p className="eyebrow">邮箱快捷登录</p>
-        <h1>用邮箱验证码进入 Spot AI</h1>
-        <p>登录后可以完成签到、点赞、关注、发布探店笔记和秒杀下单。</p>
-      </div>
-      <div className="auth-panel">
-        {user ? (
-          <div className="profile-card">
-            <div className="avatar">{user.nickName?.slice(0, 1) || 'U'}</div>
-            <h2>{user.nickName}</h2>
-            <p>ID {user.id}</p>
-            <button className="secondary wide" onClick={onLogout}>退出登录</button>
-          </div>
-        ) : (
-          <form className="form" onSubmit={onLogin}>
-            <label>
-              邮箱
-              <input value={email} onChange={(event) => setEmail(event.target.value.trim())} placeholder="请输入邮箱地址" inputMode="email" />
-            </label>
-            <label>
-              验证码
-              <div className="code-row">
-                <input value={code} onChange={(event) => setCode(event.target.value.trim())} placeholder="6 位验证码" inputMode="numeric" maxLength={6} />
-                <button type="button" className="secondary" onClick={onSendCode} disabled={busy || countdown > 0}>
-                  {countdown > 0 ? `${countdown}s` : '发送'}
-                </button>
-              </div>
-            </label>
-            <button className="primary wide" disabled={busy} type="submit">{busy ? '处理中...' : '登录 / 注册'}</button>
-          </form>
-        )}
-      </div>
-    </section>
-  )
-}
-
-function ShopPage({ categories, typeId, setTypeId, shops, loading, selectedShop, searchTitle, onOpenShop, userLocation }) {
-  return (
-    <div className="page-grid shop-layout">
-      <section className="content-section">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">附近商户</p>
-            <h1>{searchTitle || '按分类查找附近好店'}</h1>
-          </div>
-          <p className="location-note">当前位置：{userLocation.address}</p>
-        </div>
-        <div className="chips">
-          {categories.length === 0 ? (
-            <span className="chip-note">暂无分类，请先检查 tb_shop_type</span>
-          ) : categories.map((item) => (
-            <button key={item.id} className={typeId === item.id ? 'chip-active' : ''} onClick={() => setTypeId(item.id)}>
-              {item.name}
-            </button>
-          ))}
-        </div>
-        {loading ? <SkeletonList /> : (
-          <div className="shop-list">
-            {shops.length === 0 ? <EmptyState title="暂无商户" text="换个关键词或分类再试试。" /> : shops.map((shop) => (
-              <ShopCard key={shop.id} shop={shop} onOpen={() => onOpenShop(shop)} />
-            ))}
-          </div>
-        )}
-      </section>
-      <aside className="detail-panel">
-        {selectedShop ? <ShopDetail shop={selectedShop} /> : <EmptyState title="选择一家店" text="点击左侧商户查看详情。" />}
-      </aside>
-    </div>
-  )
-}
-
-function ShopDetailPage({
-  shop,
-  reviews,
-  reviewSummary,
-  loading,
-  reviewLoading,
-  reviewSummaryLoading,
-  reviewHasMore,
-  onBack,
-  onLoadMoreReviews
-}) {
-  if (loading && !shop) {
-    return <SkeletonList />
-  }
-  if (!shop) {
-    return (
-      <section className="content-section">
-        <EmptyState title="未选择商户" text="请先从附近商户列表选择一家店。" />
-        <button className="secondary" onClick={onBack}>返回列表</button>
-      </section>
-    )
-  }
-
-  const images = imageList(shop.images)
-  const heroImage = images[0]
-  return (
-    <div className="shop-detail-page">
-      <button className="text-button back-button" onClick={onBack}>返回附近商户</button>
-      <section className="shop-detail-hero">
-        {heroImage ? <img src={heroImage} alt={shop.name} /> : <ImagePlaceholder label={shop.name} large />}
-        <div>
-          <p className="eyebrow">商户详情</p>
-          <h1>{shop.name}</h1>
-          <div className="rating-line">
-            <strong>{scoreText(shop.score)}</strong>
-            <span>{shop.comments || 0} 条评价</span>
-            <span>{distanceText(shop.distance)}</span>
-          </div>
-          <p>{shop.area || '热门商圈'} · {shop.address || '地址待补充'}</p>
-          <div className="shop-action-row">
-            <button className="primary" onClick={() => window.alert('后续可接入地图导航')}>去这里</button>
-            <button className="secondary" onClick={() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })}>看评价</button>
-          </div>
-        </div>
-      </section>
-
-      <section className="detail-info-grid">
-        <ShopInfoItem label="人均消费" value={money(shop.avgPrice)} />
-        <ShopInfoItem label="营业时间" value={hoursText(shop.openHours)} multiline />
-        <ShopInfoItem label="距西电北校区" value={distanceText(shop.distance)} />
-      </section>
-
-      <ReviewAiSummary summary={reviewSummary} loading={reviewSummaryLoading} />
-
-      <section className="detail-metric-grid">
-        <Metric title="人均消费" value={money(shop.avgPrice)} action="详情" onAction={() => {}} />
-        <Metric title="营业时间" value={shop.openHours || '待补充'} action="记录" onAction={() => {}} />
-        <Metric title="距离西电北校区" value={distanceText(shop.distance)} action="GEO" onAction={() => {}} />
-      </section>
-
-      {images.length > 1 && (
-        <section className="content-section">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">店铺图片</p>
-              <h2>环境与菜品</h2>
-            </div>
-          </div>
-          <div className="shop-gallery">
-            {images.slice(0, 6).map((image) => <img key={image} src={image} alt={shop.name} />)}
-          </div>
-        </section>
-      )}
-
-      <section className="content-section">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">用户评价</p>
-            <h2>探店笔记和真实反馈</h2>
-          </div>
-        </div>
-        <div className="blog-feed">
-          {reviews.length === 0 ? (
-            <EmptyState title="暂无评价" text="当前店铺还没有用户评价，可以登录后发布第一条评价。" />
-          ) : reviews.map((blog) => (
-            <ReviewCard key={blog.id} review={blog} />
-          ))}
-          {reviewHasMore && (
-            <button className="secondary wide" onClick={onLoadMoreReviews} disabled={reviewLoading}>
-              {reviewLoading ? '加载中...' : '加载更多评价'}
-            </button>
-          )}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function BlogPage({
-  user,
-  blogs,
-  loading,
-  loggedIn,
-  hasMore,
-  detailLoading,
-  selectedBlog,
-  onLike,
-  onFollow,
-  onLoadMore,
-  onOpenBlog,
-  onCloseBlog,
-  onOpenCompose
-}) {
-  return (
-    <div className="page-grid blog-layout">
-      <section className="content-section">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">探店笔记</p>
-            <h1>真实体验和口碑内容</h1>
-          </div>
-        </div>
-        {loading ? <SkeletonList /> : (
-          <div className="blog-feed">
-            {blogs.length === 0 ? (
-              <EmptyState title="暂无探店笔记" text="当前没有从本地数据库查询到探店内容，可以登录后发布一篇。" />
-            ) : blogs.map((blog) => (
-              <BlogCard key={blog.id} blog={blog} currentUser={user} onOpen={() => onOpenBlog(blog)} onLike={() => onLike(blog.id)} onFollow={() => onFollow(blog)} />
-            ))}
-            {hasMore && (
-              <button className="secondary wide" onClick={onLoadMore} disabled={loading}>
-                {loading ? '加载中...' : '加载更多笔记'}
-              </button>
-            )}
-          </div>
-        )}
-      </section>
-      <aside className="compose-panel">
-        <p className="eyebrow">发布笔记</p>
-        <h2>写一篇探店</h2>
-        <button className="add-note-button" type="button" onClick={onOpenCompose} aria-label="发布探店笔记">
-          <span>+</span>
-          <strong>{loggedIn ? '写一篇探店' : '登录后发布'}</strong>
-          <small>{loggedIn ? '添加商户、图片和正文' : '点击后提示需要登录'}</small>
-        </button>
-      </aside>
-      {selectedBlog && (
-        <BlogDetailDialog
-          blog={selectedBlog}
-          loading={detailLoading}
-          onClose={onCloseBlog}
-          onLike={() => onLike(selectedBlog.id)}
-          onFollow={() => onFollow(selectedBlog)}
-          currentUser={user}
-        />
-      )}
-    </div>
-  )
-}
-
-function ReviewAiSummary({ summary, loading }) {
-  if (loading) {
-    return (
-      <section className="ai-review-summary" aria-busy="true" aria-label="正在生成评价总结">
-        <div className="ai-summary-heading">
-          <p className="eyebrow">AI 评论摘要</p>
-          <h2>正在分析近期评价...</h2>
-        </div>
-        <div className="ai-summary-skeleton" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-      </section>
-    )
-  }
-
-  if (!summary || summary.status !== 'READY') {
-    return (
-      <section className="ai-review-summary ai-summary-empty" role="status">
-        <div className="ai-summary-heading">
-          <p className="eyebrow">AI 评论摘要</p>
-          <h2>店铺评价概览</h2>
-        </div>
-        <p>{summary?.message || '当前暂无可用的评价总结'}</p>
-      </section>
-    )
-  }
-
-  const groups = [
-    { title: '大家认可', items: summary.highlights || [], tone: 'positive' },
-    { title: '需要留意', items: summary.weaknesses || [], tone: 'caution' },
-    { title: '适合场景', items: summary.scenes || [], tone: 'neutral' }
-  ].filter((group) => group.items.length > 0)
-
-  return (
-    <section className="ai-review-summary" aria-labelledby="ai-review-summary-title">
-      <div className="ai-summary-heading">
-        <div>
-          <p className="eyebrow">AI 评论摘要</p>
-          <h2 id="ai-review-summary-title">大家怎么评价这家店</h2>
-        </div>
-        <span>{summary.reviewCount || 0} 条评价 · {timeText(summary.generatedAt)}</span>
-      </div>
-      <p className="ai-summary-copy">{summary.summary}</p>
-      <div className="ai-summary-groups">
-        {groups.map((group) => (
-          <section key={group.title} className={`ai-summary-group ${group.tone}`}>
-            <h3>{group.title}</h3>
-            <div className="ai-summary-tags">
-              {group.items.map((item) => <span key={item}>{item}</span>)}
-            </div>
-          </section>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function ComposeBlogPage({
-  form,
-  setForm,
-  shopKeyword,
-  setShopKeyword,
-  shopResults,
-  selectedShop,
-  uploading,
-  onSearchShop,
-  onSelectShop,
-  onUploadImages,
-  onRemoveImage,
-  onPublish,
-  onBack
-}) {
-  const images = imageList(form.images)
-  const availableShops = shopResults.filter((shop) => String(shop.id) !== String(selectedShop?.id))
-  return (
-    <div className="compose-page">
-      <button className="text-button back-button" type="button" onClick={onBack}>返回探店</button>
-      <section className="compose-workspace">
-        <div className="compose-main">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">发布探店笔记</p>
-              <h1>记录这家店的真实体验</h1>
-            </div>
-            <button className="primary" type="button" onClick={onPublish}>发布</button>
-          </div>
-
-          <form className="shop-search-panel" onSubmit={onSearchShop}>
-            <label>
-              搜索店铺
-              <div className="inline-search">
-                <input
-                  value={shopKeyword}
-                  onChange={(event) => setShopKeyword(event.target.value)}
-                  placeholder="输入店名、商圈或地址"
-                />
-                <button className="secondary" type="submit">搜索</button>
-              </div>
-            </label>
-            {selectedShop && (
-              <div className="selected-shop">
-                <span className="selected-label">已确定店铺</span>
-                <strong>{selectedShop.name}</strong>
-                <small>{selectedShop.area || '商圈待补充'} · {selectedShop.address || '地址待补充'}</small>
-              </div>
-            )}
-            {availableShops.length > 0 && (
-              <div className="shop-picker" role="listbox" aria-label="店铺搜索结果">
-                {availableShops.map((shop) => (
-                  <button
-                    key={shop.id}
-                    type="button"
-                    className={String(form.shopId) === String(shop.id) ? 'shop-pick-active' : ''}
-                    onClick={() => onSelectShop(shop)}
-                  >
-                    <span>
-                      <strong>{shop.name}</strong>
-                      <em>选择这家</em>
-                    </span>
-                    <small>{shop.area || '热门商圈'} · {shop.address || '地址待补充'}</small>
-                  </button>
-                ))}
-              </div>
-            )}
-          </form>
-
-          <form className="form note-editor" onSubmit={onPublish}>
-            <input type="hidden" value={form.shopId} readOnly />
-            <label>
-              标题
-              <input
-                value={form.title}
-                onChange={(event) => setForm({ ...form, title: event.target.value })}
-                placeholder="例如：这家店的午市套餐很能打"
-              />
-            </label>
-            <label>
-              正文
-              <textarea
-                value={form.content}
-                onChange={(event) => setForm({ ...form, content: event.target.value })}
-                placeholder="口味、环境、服务、排队情况..."
-              />
-            </label>
-            <button className="primary wide" type="submit">发布探店笔记</button>
-          </form>
-        </div>
-
-        <aside className="upload-panel">
-          <p className="eyebrow">图片</p>
-          <h2>上传现场照片</h2>
-          <label className="upload-drop">
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              disabled={uploading}
-              onChange={(event) => {
-                onUploadImages(event.target.files)
-                event.target.value = ''
-              }}
-            />
-            <span>+</span>
-            <strong>{uploading ? '上传中...' : '选择图片'}</strong>
-            <small>最多一次选择 9 张，上传后自动写入笔记</small>
-          </label>
-          {images.length > 0 ? (
-            <div className="uploaded-grid">
-              {images.map((image) => (
-                <div key={image} className="uploaded-image">
-                  <img src={image} alt="探店上传图片" />
-                  <button type="button" onClick={() => onRemoveImage(image)} aria-label="移除图片">×</button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="还没有图片" text="上传店铺环境、菜品或菜单照片，内容会更完整。" />
-          )}
-        </aside>
-      </section>
-    </div>
-  )
-}
-
-function DealPage({ activities, loading, busyId, loggedIn, onRefresh, onClaim, onLogin }) {
-  const activeSeckill = activities.filter((item) => item.type === 1 && item.activityStatus === 'ACTIVE')
-  const upcomingSeckill = activities.filter((item) => item.type === 1 && item.activityStatus === 'UPCOMING')
-  const normalVouchers = activities.filter((item) => item.type === 0)
-  return (
-    <div className="deal-page">
-      <section className="deal-hero user-deal-hero">
-        <div>
-          <p className="eyebrow">限时优惠</p>
-          <h1>抢代金券和秒杀券</h1>
-          <p>活动数据来自本地数据库，只展示当前或未来可以参与的优惠。</p>
-          <div className="hero-actions">
-            <button className="primary" onClick={loggedIn ? onRefresh : onLogin}>{loggedIn ? '刷新活动' : '登录参与'}</button>
-            <button className="ghost" onClick={onRefresh}>查看最新</button>
-          </div>
-        </div>
-        <div className="coupon-preview" aria-hidden="true">
-          <span>券</span>
-          <strong>{activeSeckill.length} 场秒杀进行中</strong>
-          <p>{upcomingSeckill.length} 场即将开始 · {normalVouchers.length} 张代金券可领</p>
-        </div>
-      </section>
-
-      {loading ? <SkeletonList /> : (
-        <div className="deal-sections">
-          <VoucherSection
-            title="正在秒杀"
-            text="库存有限，下单结果以服务端异步处理为准。"
-            items={activeSeckill}
-            busyId={busyId}
-            onClaim={onClaim}
-          />
-          <VoucherSection
-            title="即将开始"
-            text="提前查看活动时间，开始后即可参与。"
-            items={upcomingSeckill}
-            busyId={busyId}
-            onClaim={onClaim}
-          />
-          <VoucherSection
-            title="代金券"
-            text="登录后可直接领取，到店消费时使用。"
-            items={normalVouchers}
-            busyId={busyId}
-            onClaim={onClaim}
-          />
-          {activities.length === 0 && (
-            <EmptyState title="暂无可参与活动" text="当前数据库中没有上架且未结束的优惠活动。" />
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function VoucherSection({ title, text, items, busyId, onClaim }) {
-  if (items.length === 0) return null
-  return (
-    <section className="content-section voucher-section">
-      <div className="section-head">
-        <div>
-          <p className="eyebrow">{title}</p>
-          <h2>{text}</h2>
-        </div>
-      </div>
-      <div className="voucher-grid">
-        {items.map((item) => (
-          <VoucherCard key={item.id} activity={item} busy={busyId === item.id} onClaim={() => onClaim(item)} />
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function VoucherCard({ activity, busy, onClaim }) {
-  const isSeckill = activity.type === 1
-  const discount = Number(activity.actualValue || 0) - Number(activity.payValue || 0)
-  const stock = activity.stock ?? 0
-  const initStock = activity.initStock || stock || 1
-  const progress = isSeckill ? Math.max(0, Math.min(100, Math.round((stock / initStock) * 100))) : 100
-  const disabled = busy || activity.activityStatus === 'UPCOMING' || activity.activityStatus === 'SOLD_OUT'
-  const buttonText = busy
-    ? '处理中...'
-    : activity.activityStatus === 'UPCOMING'
-      ? '未开始'
-      : activity.activityStatus === 'SOLD_OUT'
-        ? '已抢完'
-        : isSeckill ? '立即秒杀' : '立即领取'
-  return (
-    <article className={isSeckill ? 'voucher-card seckill-card' : 'voucher-card'}>
-      <div className="voucher-value">
-        <strong>{yuan(activity.actualValue)}</strong>
-        <span>{activity.payValue > 0 ? `${yuan(activity.payValue)} 抢` : '免费领'}</span>
-      </div>
-      <div className="voucher-body">
-        <div className="voucher-title-row">
-          <h3>{activity.title}</h3>
-          <span>{isSeckill ? '秒杀券' : '代金券'}</span>
-        </div>
-        <p>{activity.shopName || `商户 ${activity.shopId}`}</p>
-        <p>{activity.subTitle || activity.rules || '到店消费可用'}</p>
-        {isSeckill && (
-          <>
-            <div className="stock-line">
-              <span>剩余 {stock}</span>
-              <span>{timeText(activity.beginTime)} - {timeText(activity.endTime)}</span>
-            </div>
-            <div className="stock-bar" aria-label={`剩余库存 ${progress}%`}>
-              <span style={{ width: `${progress}%` }} />
-            </div>
-          </>
-        )}
-        {!isSeckill && <p className="saving-line">可抵扣 {yuan(discount > 0 ? discount : activity.actualValue)}</p>}
-        <button className={isSeckill ? 'primary' : 'secondary'} disabled={disabled} onClick={onClaim}>
-          {buttonText}
-        </button>
-      </div>
-    </article>
-  )
-}
-
-function ProfilePage({
-  user,
-  signDays,
-  siteUv,
-  shopUv,
-  profileData,
-  profileLoading,
-  profilePanel,
-  feed,
-  selectedShop,
-  onSign,
-  onPanel,
-  onRefreshProfile,
-  onRefreshStats,
-  onOpenBlog,
-  onLike,
-  onFollow,
-  onLogin,
-  onLogout
-}) {
-  if (!user) {
-    return (
-      <section className="auth-layout">
-        <div className="auth-copy">
-          <p className="eyebrow">个人中心</p>
-          <h1>登录后查看你的本地生活数据</h1>
-          <p>签到、关注流、点赞、秒杀订单都依赖登录态。</p>
-          <button className="primary" onClick={onLogin}>去登录</button>
-        </div>
-      </section>
-    )
-  }
-
-  const data = profileData || {}
-  const panelItems = {
-    notes: data.myBlogs || [],
-    likes: data.likedBlogs || [],
-    coupons: data.vouchers || [],
-    reviews: data.reviews || [],
-    sign: []
-  }
-  const panelTitle = {
-    notes: '我发布的笔记',
-    likes: '我点赞的笔记',
-    coupons: '我的优惠券',
-    reviews: '我发布的评价',
-    sign: '签到记录'
-  }[profilePanel]
-
-  return (
-    <div className="profile-layout">
-      <section className="profile-banner">
-        <div className="avatar large">{user.nickName?.slice(0, 1) || 'U'}</div>
-        <div>
-          <p className="eyebrow">当前登录</p>
-          <h1>{user.nickName}</h1>
-          <p>ID {user.id} · 关注 {data.followCount ?? 0} · 粉丝 {data.fanCount ?? 0}</p>
-        </div>
-        <div className="profile-actions">
-          <button className="secondary" onClick={onRefreshProfile} disabled={profileLoading}>
-            {profileLoading ? '刷新中...' : '刷新'}
-          </button>
-          <button className="secondary" onClick={onLogout}>退出</button>
-        </div>
-      </section>
-      <section className="profile-widget-grid">
-        <ProfileWidget active={profilePanel === 'likes'} title="点赞笔记" value={data.likedBlogCount ?? 0} onClick={() => onPanel('likes')} />
-        <ProfileWidget active={profilePanel === 'coupons'} title="优惠券" value={data.voucherCount ?? 0} onClick={() => onPanel('coupons')} />
-        <ProfileWidget active={profilePanel === 'notes'} title="发布笔记" value={data.blogCount ?? 0} onClick={() => onPanel('notes')} />
-        <ProfileWidget active={profilePanel === 'reviews'} title="发布评价" value={data.reviewCount ?? 0} onClick={() => onPanel('reviews')} />
-        <ProfileWidget active={profilePanel === 'sign'} title="连续签到" value={`${data.signDays ?? signDays ?? 0} 天`} action="签到" onClick={() => onPanel('sign')} onAction={onSign} />
-      </section>
-
-      <section className="content-section profile-panel">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">个人数据</p>
-            <h2>{panelTitle}</h2>
-          </div>
-        </div>
-        {profileLoading ? <SkeletonList /> : (
-          <ProfilePanel
-            type={profilePanel}
-            items={panelItems[profilePanel] || []}
-            signDays={data.signDays ?? signDays ?? 0}
-            siteUv={siteUv}
-            shopUv={shopUv}
-            selectedShop={selectedShop}
-            currentUser={user}
-            onSign={onSign}
-            onRefreshStats={onRefreshStats}
-            onOpenBlog={onOpenBlog}
-            onLike={onLike}
-            onFollow={onFollow}
-          />
-        )}
-      </section>
-
-      <section className="content-section">
-        <div className="section-head">
-          <div>
-            <p className="eyebrow">关注流</p>
-            <h2>关注博主的最新笔记</h2>
-          </div>
-          <button className="secondary" onClick={onRefreshProfile}>刷新关注流</button>
-        </div>
-        <div className="blog-feed">
-          {feed.length === 0 ? (
-            <EmptyState title="暂无关注流" text="关注探店作者后，他们发布的新笔记会出现在这里。" />
-          ) : feed.map((blog) => (
-            <BlogCard key={`profile-feed-${blog.id}`} blog={blog} currentUser={user} onOpen={() => onOpenBlog(blog)} onLike={() => onLike(blog.id)} onFollow={() => onFollow(blog)} />
-          ))}
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function ProfileWidget({ active, title, value, action, onClick, onAction }) {
-  return (
-    <button className={active ? 'profile-widget active' : 'profile-widget'} type="button" onClick={onClick}>
-      <span>{title}</span>
-      <strong>{value}</strong>
-      {action && <em onClick={(event) => {
-        event.stopPropagation()
-        onAction()
-      }}>{action}</em>}
-    </button>
-  )
-}
-
-function ProfilePanel({ type, items, signDays, siteUv, shopUv, selectedShop, currentUser, onSign, onRefreshStats, onOpenBlog, onLike, onFollow }) {
-  if (type === 'sign') {
-    return (
-      <div className="metric-grid">
-        <Metric title="连续签到" value={`${signDays ?? 0} 天`} action="签到" onAction={onSign} />
-        <Metric title="全站今日 UV" value={siteUv ?? '-'} action="刷新" onAction={onRefreshStats} />
-        <Metric title={`${selectedShop?.name || '当前商户'} UV`} value={shopUv ?? '-'} action="刷新" onAction={onRefreshStats} />
-      </div>
-    )
-  }
-  if (items.length === 0) {
-    const emptyText = {
-      notes: '你还没有发布探店笔记。',
-      likes: '你还没有点赞过探店笔记。',
-      coupons: '你还没有领取优惠券。',
-      reviews: '你还没有发布评价。'
-    }[type] || '暂无数据'
-    return <EmptyState title="暂无内容" text={emptyText} />
-  }
-  if (type === 'coupons') {
-    return (
-      <div className="profile-coupon-list">
-        {items.map((voucher) => <UserVoucherCard key={voucher.orderId} voucher={voucher} />)}
-      </div>
-    )
-  }
-  if (type === 'reviews') {
-    return (
-      <div className="blog-feed">
-        {items.map((review) => <ReviewCard key={review.id} review={review} />)}
-      </div>
-    )
-  }
-  return (
-    <div className="blog-feed">
-      {items.map((blog) => (
-        <BlogCard key={`${type}-${blog.id}`} blog={blog} currentUser={currentUser} onOpen={() => onOpenBlog(blog)} onLike={() => onLike(blog.id)} onFollow={() => onFollow(blog)} />
-      ))}
-    </div>
-  )
-}
-
-function UserVoucherCard({ voucher }) {
-  return (
-    <article className="user-voucher-card">
-      <div>
-        <strong>{yuan(voucher.actualValue)}</strong>
-        <span>{voucher.payValue > 0 ? `${yuan(voucher.payValue)} 抢` : '免费领取'}</span>
-      </div>
-      <section>
-        <h3>{voucher.title || `优惠券 ${voucher.voucherId}`}</h3>
-        <p>{voucher.shopName || `商户 ${voucher.shopId || '-'}`}</p>
-        <p>{voucher.subTitle || '到店消费可用'} · {voucher.type === 1 ? '秒杀券' : '代金券'}</p>
-        <small>订单 {voucher.orderId} · {dateText(voucher.createTime)}</small>
-      </section>
-    </article>
-  )
-}
-
-function ShopCard({ shop, onOpen }) {
-  const image = normalizeImage(shop.images)
-  return (
-    <article className="shop-card">
-      {image ? <img src={image} alt={shop.name} /> : <ImagePlaceholder label={shop.name} />}
-      <div>
-        <div className="card-title-row">
-          <h3>{shop.name}</h3>
-          <span>{distanceText(shop.distance)}</span>
-        </div>
-        <p><strong>{scoreText(shop.score)}</strong> · {shop.comments || 0} 条评价 · 已售 {shop.sold || 0}</p>
-        <p>{shop.area || '热门商圈'} · {shop.address || '地址待补充'}</p>
-        <p>人均 {money(shop.avgPrice)} · {shop.openHours || '营业时间待定'}</p>
-        <button className="text-button" onClick={onOpen}>查看详情</button>
-      </div>
-    </article>
-  )
-}
-
-function ShopDetail({ shop }) {
-  const image = normalizeImage(shop.images)
-  return (
-    <div className="shop-detail">
-      {image ? <img src={image} alt={shop.name} /> : <ImagePlaceholder label={shop.name} large />}
-      <p className="eyebrow">商户详情</p>
-      <h2>{shop.name}</h2>
-      <div className="rating-line">
-        <strong>{scoreText(shop.score)}</strong>
-        <span>{shop.comments || 0} 条评价</span>
-        <span>{distanceText(shop.distance)}</span>
-      </div>
-      <dl>
-        <div><dt>商圈</dt><dd>{shop.area || '-'}</dd></div>
-        <div><dt>地址</dt><dd>{shop.address || '-'}</dd></div>
-        <div><dt>营业</dt><dd>{shop.openHours || '-'}</dd></div>
-        <div><dt>人均</dt><dd>{money(shop.avgPrice)}</dd></div>
-      </dl>
-    </div>
-  )
-}
-
-function ShopInfoItem({ label, value, multiline = false }) {
-  return (
-    <article className={multiline ? 'shop-info-item multiline' : 'shop-info-item'}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  )
-}
-
-function BlogCard({ blog, currentUser, onOpen, onLike, onFollow }) {
-  const image = normalizeImage(blog.images)
-  const content = richTextToPlainText(blog.content)
-  const preview = content.length > 120 ? `${content.slice(0, 120)}...` : content
-  const isSelf = currentUser && String(currentUser.id) === String(blog.userId)
-  const followText = isSelf ? '本人' : blog.isFollow ? '已关注' : '关注'
-  return (
-    <article className="blog-card clickable-card" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(event) => {
-      if (event.key === 'Enter') onOpen()
-    }}>
-      {image ? <img src={image} alt={blog.title} /> : <ImagePlaceholder label="探店" />}
-      <div>
-        <div className="author-line">
-          <span className="mini-avatar">{blog.name?.slice(0, 1) || 'U'}</span>
-          <strong>{blog.name || `用户 ${blog.userId}`}</strong>
-          <button className="text-button" onClick={(event) => {
-            event.stopPropagation()
-            onFollow()
-          }}>{followText}</button>
-        </div>
-        <h3>{blog.title}</h3>
-        <p>{preview}</p>
-        <div className="blog-actions">
-          <button className={blog.isLike ? 'liked' : ''} onClick={(event) => {
-            event.stopPropagation()
-            onLike()
-          }}>赞 {blog.liked || 0}</button>
-          <span>评 {blog.comments || 0}</span>
-          <span>{blog.createTime ? String(blog.createTime).slice(0, 10) : '刚刚'}</span>
-        </div>
-      </div>
-    </article>
-  )
-}
-
-function BlogDetailDialog({ blog, loading, currentUser, onClose, onLike, onFollow }) {
-  const images = imageList(blog.images)
-  const content = richTextToPlainText(blog.content)
-  const isSelf = currentUser && String(currentUser.id) === String(blog.userId)
-  const followText = isSelf ? '本人' : blog.isFollow ? '已关注' : '关注'
-  return (
-    <div className="dialog-backdrop" role="presentation" onClick={onClose}>
-      <section className="blog-dialog" role="dialog" aria-modal="true" aria-label={blog.title} onClick={(event) => event.stopPropagation()}>
-        <button className="dialog-close" type="button" onClick={onClose} aria-label="关闭">×</button>
-        {loading ? (
-          <SkeletonList />
-        ) : (
-          <>
-            <div className="author-line">
-              <span className="mini-avatar">{blog.name?.slice(0, 1) || 'U'}</span>
-              <strong>{blog.name || `用户 ${blog.userId}`}</strong>
-              <button className="text-button" onClick={onFollow}>{followText}</button>
-            </div>
-            <h2>{blog.title}</h2>
-            {images.length > 0 && (
-              <div className="blog-dialog-images">
-                {images.slice(0, 9).map((image) => <img key={image} src={image} alt={blog.title} />)}
-              </div>
-            )}
-            <p className="blog-dialog-content">{content}</p>
-            <div className="blog-actions">
-              <button className={blog.isLike ? 'liked' : ''} onClick={onLike}>赞 {blog.liked || 0}</button>
-              <span>评 {blog.comments || 0}</span>
-              <span>{dateText(blog.createTime)}</span>
-            </div>
-          </>
-        )}
-      </section>
-    </div>
-  )
-}
-
-function ReviewCard({ review }) {
-  const [expanded, setExpanded] = useState(false)
-  const content = richTextToPlainText(review.content)
-  const compact = content.length > 120
-  const visibleContent = expanded || !compact ? content : `${content.slice(0, 120)}...`
-  const images = Array.isArray(review.images) ? review.images : []
-
-  return (
-    <article className="review-card">
-      <div className="review-author">
-        <span className="mini-avatar">{review.userName?.slice(0, 1) || 'U'}</span>
-        <div>
-          <strong>{review.userName || `用户 ${review.userId}`}</strong>
-          <span>{dateText(review.createTime)}</span>
-        </div>
-      </div>
-      <div className="review-score" aria-label={`${review.score || 0} 分`}>
-        <span>{stars(review.score)}</span>
-        <strong>{review.score || 0}.0</strong>
-      </div>
-      <p>{visibleContent}</p>
-      {compact && (
-        <button className="text-button" onClick={() => setExpanded((value) => !value)}>
-          {expanded ? '收起' : '展开'}
-        </button>
-      )}
-      {images.length > 0 && (
-        <div className="review-images">
-          {images.slice(0, 6).map((image) => <img key={image} src={image} alt="评价图片" />)}
-        </div>
-      )}
-      <div className="review-meta">
-        <span>{review.liked || 0} 人觉得有用</span>
-      </div>
-    </article>
-  )
-}
-
-function VisualPanel({ image, title, subtitle }) {
-  return (
-    <div className="visual-panel">
-      {image ? <img src={image} alt={title} /> : (
-        <div className="visual-placeholder">
-          <strong>{title}</strong>
-          <span>{subtitle}</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ImagePlaceholder({ label, large = false }) {
-  return (
-    <div className={large ? 'image-placeholder large' : 'image-placeholder'}>
-      <span>{label?.slice(0, 2) || '店铺'}</span>
-    </div>
-  )
-}
-
-function Metric({ title, value, action, onAction }) {
-  return (
-    <article className="metric-card">
-      <p>{title}</p>
-      <strong>{value}</strong>
-      <button className="text-button" onClick={onAction}>{action}</button>
-    </article>
-  )
-}
-
-function EmptyState({ title, text }) {
-  return (
-    <div className="empty-state">
-      <strong>{title}</strong>
-      <p>{text}</p>
-    </div>
-  )
-}
-
-function SkeletonList() {
-  return (
-    <div className="skeleton-list" aria-busy="true" aria-label="正在加载">
-      <span />
-      <span />
-      <span />
-    </div>
-  )
+function formatVoucher(voucher) {
+  const actual = voucher.actualValue ? yuan(voucher.actualValue) : '优惠券'
+  const pay = voucher.payValue > 0 ? ` ${Math.round(Number(voucher.payValue) / 100)}元抢` : ' 免费领'
+  return `${voucher.title || actual}${pay}`
 }
 
 createRoot(document.getElementById('root')).render(<App />)
+

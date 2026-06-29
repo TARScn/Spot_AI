@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -99,6 +100,38 @@ class SpringAiChatServiceTest {
         verify(deps.memoryRepository).upsert(eq(2001L), eq(99L), eq("dining.preference.environment"), eq("preference"), eq("{\"likes\":[\"安静\"]}"), anyDouble(), eq(1001L), eq("PreferenceExtractorAgent"));
     }
 
+    @Test
+    void addsPreFilteredShopRecommendationsForBudgetRequest() {
+        CapturingChatModel chatModel = new CapturingChatModel("推荐 [平价高评分F](spotai://shop/6)。");
+        TestDependencies deps = new TestDependencies(chatModel);
+        when(deps.spotAiChatTools.recommendShops(40L, 60L, "", "", 5))
+                .thenReturn("[{\"id\":6,\"name\":\"平价高评分F\",\"shopUrl\":\"spotai://shop/6\",\"avgPrice\":50}]");
+        AiChatRequestDTO request = new AiChatRequestDTO();
+        request.setMessage("推荐几家人均50左右的店");
+
+        deps.service().chat(request);
+
+        assertThat(chatModel.prompt.getContents()).contains("后端预筛选推荐候选");
+        assertThat(chatModel.prompt.getContents()).contains("spotai://shop/6");
+    }
+
+    @Test
+    void passesParsedAreaAndKeywordToRecommendationTool() {
+        CapturingChatModel chatModel = new CapturingChatModel("推荐 [钟楼火锅店](spotai://shop/8)。");
+        TestDependencies deps = new TestDependencies(chatModel);
+        when(deps.spotAiChatTools.recommendShops(40L, 60L, "火锅", "钟楼", 5))
+                .thenReturn("[{\"id\":8,\"name\":\"钟楼火锅店\",\"shopUrl\":\"spotai://shop/8\",\"avgPrice\":52}]");
+        AiChatRequestDTO request = new AiChatRequestDTO();
+        request.setRoute("CHAT");
+        request.setMessage("推荐几家钟楼人均50左右的火锅店");
+
+        deps.service().chat(request);
+
+        assertThat(chatModel.prompt.getContents()).contains("当前子 Agent 路由：SHOP_GUIDE");
+        assertThat(chatModel.prompt.getContents()).contains("spotai://shop/8");
+        verify(deps.spotAiChatTools).recommendShops(40L, 60L, "火锅", "钟楼", 5);
+    }
+
     private static class TestDependencies {
         private final CapturingChatModel chatModel;
         private final AiConversationRepository conversationRepository = mock(AiConversationRepository.class);
@@ -123,6 +156,7 @@ class SpringAiChatServiceTest {
             when(spotAiChatTools.queryReviewSummary(anyLong())).thenReturn("{}");
             when(spotAiChatTools.queryCoupons(anyLong())).thenReturn("[]");
             when(spotAiChatTools.recommendShops(anyLong(), any())).thenReturn("[]");
+            when(spotAiChatTools.recommendShops(anyLong(), anyLong(), anyString(), anyString(), anyInt())).thenReturn("[]");
         }
 
         private SpringAiChatService service() {

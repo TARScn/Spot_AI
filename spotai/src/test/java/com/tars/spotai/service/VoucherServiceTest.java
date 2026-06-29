@@ -36,7 +36,6 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -101,24 +100,55 @@ class VoucherServiceTest {
     }
 
     @Test
-    void seckillVoucherRollsBackRedisWhenRocketMqSendFails() {
+    void seckillVoucherCreatesOrderDirectlyWhenRocketMqSendFails() throws InterruptedException {
         UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
         when(voucherRepository.findVoucherById(2001L)).thenReturn(seckillVoucherBase());
         when(voucherRepository.findSeckillVoucherByVoucherId(2001L)).thenReturn(activeSeckillVoucher());
         when(stringRedisTemplate.hasKey("seckill:stock:2001")).thenReturn(true);
         when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001")))
-                .thenReturn(0L)
                 .thenReturn(0L);
         when(redisIdWorker.nextId("voucher_order")).thenReturn(9001L);
         doThrow(new IllegalStateException("rocketmq down"))
                 .when(rocketMQTemplate)
                 .syncSend(eq("spotai.voucher-order.create"), any(VoucherOrderMessage.class), anyLong());
 
+        mockSuccessfulDirectOrderCreation();
+
         Result<Long> result = voucherService.seckillVoucher(2001L);
 
-        assertThat(result.isSuccess()).isFalse();
-        assertThat(result.getErrorMsg()).isEqualTo("系统繁忙，请稍后重试");
-        verify(stringRedisTemplate, times(2)).execute(any(DefaultRedisScript.class), anyList(), eq("1001"));
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(9001L);
+        verify(voucherRepository).insertVoucherOrder(9001L, 1001L, 2001L);
+    }
+
+    @Test
+    void seckillVoucherCreatesOrderDirectlyWhenMqDisabled() throws InterruptedException {
+        VoucherProperties voucherProperties = new VoucherProperties();
+        voucherProperties.setMqEnabled(false);
+        voucherService = new VoucherService(
+                voucherRepository,
+                shopRepository,
+                redisIdWorker,
+                stringRedisTemplate,
+                rocketMQTemplate,
+                voucherProperties,
+                redissonClient,
+                transactionTemplate
+        );
+        UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
+        when(voucherRepository.findVoucherById(2001L)).thenReturn(seckillVoucherBase());
+        when(voucherRepository.findSeckillVoucherByVoucherId(2001L)).thenReturn(activeSeckillVoucher());
+        when(stringRedisTemplate.hasKey("seckill:stock:2001")).thenReturn(true);
+        when(stringRedisTemplate.execute(any(DefaultRedisScript.class), anyList(), eq("1001"))).thenReturn(0L);
+        when(redisIdWorker.nextId("voucher_order")).thenReturn(9001L);
+        mockSuccessfulDirectOrderCreation();
+
+        Result<Long> result = voucherService.seckillVoucher(2001L);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(9001L);
+        verify(rocketMQTemplate, never()).syncSend(anyString(), any(VoucherOrderMessage.class), anyLong());
+        verify(voucherRepository).insertVoucherOrder(9001L, 1001L, 2001L);
     }
 
     @Test
@@ -154,6 +184,18 @@ class VoucherServiceTest {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(transactionStatus);
         });
+    }
+
+    private void mockSuccessfulDirectOrderCreation() throws InterruptedException {
+        when(redissonClient.getLock("lock:order:1001:2001")).thenReturn(lock);
+        when(lock.tryLock(1, 10, TimeUnit.SECONDS)).thenReturn(true);
+        when(lock.isHeldByCurrentThread()).thenReturn(true);
+        when(voucherRepository.existsOrder(1001L, 2001L)).thenReturn(false);
+        when(voucherRepository.deductStock(2001L)).thenReturn(1);
+        when(voucherRepository.queryStock(2001L)).thenReturn(9);
+        when(redisIdWorker.nextId("voucher_order_router")).thenReturn(9101L);
+        when(redisIdWorker.nextId("voucher_reconcile_log")).thenReturn(9201L);
+        invokeTransactionCallback();
     }
 
     private Voucher seckillVoucherBase() {

@@ -123,6 +123,10 @@ public class BlogService {
         return Result.ok(toViewDTOList(blogRepository.findHot(normalizeCurrent(current))));
     }
 
+    public Result<List<BlogViewDTO>> queryRecentBlog(Integer current) {
+        return Result.ok(toViewDTOList(blogRepository.findRecentPaged(normalizeCurrent(current))));
+    }
+
     public Result<List<BlogViewDTO>> queryMyBlog(Integer current) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
@@ -196,6 +200,29 @@ public class BlogService {
             stringRedisTemplate.execute(ROLLBACK_LIKE_SCRIPT, List.of(key, userLikedKey), userId, String.valueOf(action), now, String.valueOf(id));
             return Result.fail("点赞失败，请稍后重试");
         }
+        return Result.ok(null);
+    }
+
+    public Result<Void> deleteBlog(Long id) {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            return Result.fail("璇峰厛鐧诲綍");
+        }
+        if (id == null || id <= 0) {
+            return Result.fail("鎺㈠簵绗旇ID涓嶅悎娉?");
+        }
+        Blog blog = blogRepository.findById(id);
+        if (blog == null) {
+            return Result.fail("鎺㈠簵绗旇涓嶅瓨鍦?");
+        }
+        if (!currentUser.getId().equals(blog.getUserId())) {
+            return Result.fail("鏃犳潈鍒犻櫎璇ョ瑪璁?");
+        }
+        int affectedRows = blogRepository.deleteByIdAndUserId(id, currentUser.getId());
+        if (affectedRows == 0) {
+            return Result.fail("鍒犻櫎澶辫触");
+        }
+        stringRedisTemplate.delete(RedisConstants.BLOG_LIKED_KEY + id);
         return Result.ok(null);
     }
 

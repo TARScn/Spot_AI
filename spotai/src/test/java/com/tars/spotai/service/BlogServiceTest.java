@@ -111,6 +111,30 @@ class BlogServiceTest {
     }
 
     @Test
+    void deleteBlogDeletesOnlyCurrentUsersBlog() {
+        UserHolder.saveUser(new UserDTO(1001L, "alice", ""));
+        when(blogRepository.findById(9001L)).thenReturn(blog(9001L, 1001L));
+        when(blogRepository.deleteByIdAndUserId(9001L, 1001L)).thenReturn(1);
+
+        Result<Void> result = blogService.deleteBlog(9001L);
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(blogRepository).deleteByIdAndUserId(9001L, 1001L);
+        verify(stringRedisTemplate).delete(RedisConstants.BLOG_LIKED_KEY + 9001L);
+    }
+
+    @Test
+    void deleteBlogRejectsOtherUsersBlog() {
+        UserHolder.saveUser(new UserDTO(1001L, "alice", ""));
+        when(blogRepository.findById(9001L)).thenReturn(blog(9001L, 1002L));
+
+        Result<Void> result = blogService.deleteBlog(9001L);
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(blogRepository, never()).deleteByIdAndUserId(any(), any());
+    }
+
+    @Test
     void queryBlogLikesReturnsUsersInRedisOrder() {
         when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(zSetOperations.reverseRange(RedisConstants.BLOG_LIKED_KEY + 9001L, 0, 4))

@@ -3,6 +3,7 @@ package com.tars.spotai.repository;
 import com.tars.spotai.entity.Review;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
@@ -115,6 +116,71 @@ public class ReviewRepository {
                 args
         );
         return new HashMap<>(imageMap);
+    }
+
+    public void save(Review review) {
+        jdbcTemplate.update(
+                """
+                        insert into tb_review
+                            (id, shop_id, user_id, order_id, score, content, status, liked,
+                             images_count, create_time, update_time)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                review.getId(),
+                review.getShopId(),
+                review.getUserId(),
+                review.getOrderId(),
+                review.getScore(),
+                review.getContent(),
+                review.getStatus(),
+                review.getLiked(),
+                review.getImagesCount(),
+                review.getCreateTime(),
+                review.getUpdateTime()
+        );
+    }
+
+    public Review findById(Long id) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    """
+                            select id, shop_id, user_id, order_id, score, content, status, liked, images_count, create_time, update_time
+                            from tb_review
+                            where id = ?
+                            """,
+                    new ReviewRowMapper(),
+                    id
+            );
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    public void saveImages(Long reviewId, List<Long> imageIds, List<String> imageUrls) {
+        if (reviewId == null || imageUrls == null || imageUrls.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < imageUrls.size(); i++) {
+            jdbcTemplate.update(
+                    """
+                            insert into tb_review_image (id, review_id, image_url, sort, create_time)
+                            values (?, ?, ?, ?, ?)
+                            """,
+                    imageIds.get(i),
+                    reviewId,
+                    imageUrls.get(i),
+                    i,
+                    LocalDateTime.now()
+            );
+        }
+    }
+
+    public int markDeletedByIdAndUserId(Long id, Long userId) {
+        return jdbcTemplate.update(
+                "update tb_review set status = 2 where id = ? and user_id = ? and status = 0",
+                id,
+                userId
+        );
     }
 
     private static class ReviewRowMapper implements RowMapper<Review> {

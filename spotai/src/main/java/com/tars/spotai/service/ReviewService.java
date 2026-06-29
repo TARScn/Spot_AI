@@ -2,6 +2,7 @@ package com.tars.spotai.service;
 
 import com.tars.spotai.dto.PageResultDTO;
 import com.tars.spotai.dto.Result;
+import com.tars.spotai.dto.ReviewCreateDTO;
 import com.tars.spotai.dto.ReviewViewDTO;
 import com.tars.spotai.dto.UserDTO;
 import com.tars.spotai.entity.Review;
@@ -9,9 +10,13 @@ import com.tars.spotai.entity.User;
 import com.tars.spotai.repository.ReviewRepository;
 import com.tars.spotai.repository.ShopRepository;
 import com.tars.spotai.repository.UserRepository;
+import com.tars.spotai.utils.RedisIdWorker;
 import com.tars.spotai.utils.UserHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -22,13 +27,54 @@ public class ReviewService {
     private final ReviewRepository reviewRepository;
     private final ShopRepository shopRepository;
     private final UserRepository userRepository;
+    private final RedisIdWorker redisIdWorker;
 
     public ReviewService(ReviewRepository reviewRepository,
                          ShopRepository shopRepository,
-                         UserRepository userRepository) {
+                         UserRepository userRepository,
+                         RedisIdWorker redisIdWorker) {
         this.reviewRepository = reviewRepository;
         this.shopRepository = shopRepository;
         this.userRepository = userRepository;
+        this.redisIdWorker = redisIdWorker;
+    }
+
+    @Transactional
+    public Result<Long> saveReview(ReviewCreateDTO createDTO) {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            return Result.fail("Please login first");
+        }
+        Result<List<String>> validation = validateCreateDTO(createDTO);
+        if (!validation.isSuccess()) {
+            return Result.fail(validation.getErrorMsg());
+        }
+        if (shopRepository.findById(createDTO.getShopId()) == null) {
+            return Result.fail("Shop not found");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        List<String> images = validation.getData();
+        Long reviewId = redisIdWorker.nextId("review");
+        Review review = new Review();
+        review.setId(reviewId);
+        review.setShopId(createDTO.getShopId());
+        review.setUserId(currentUser.getId());
+        review.setScore(createDTO.getScore());
+        review.setContent(createDTO.getContent().trim());
+        review.setStatus(0);
+        review.setLiked(0);
+        review.setImagesCount(images.size());
+        review.setCreateTime(now);
+        review.setUpdateTime(now);
+        reviewRepository.save(review);
+        if (!images.isEmpty()) {
+            List<Long> imageIds = images.stream()
+                    .map(image -> redisIdWorker.nextId("review_image"))
+                    .toList();
+            reviewRepository.saveImages(reviewId, imageIds, images);
+        }
+        return Result.ok(reviewId);
     }
 
     public Result<PageResultDTO<ReviewViewDTO>> queryByShop(Long shopId, Integer current) {
@@ -54,6 +100,28 @@ public class ReviewService {
         return Result.ok(new PageResultDTO<>(dtoList, page, PAGE_SIZE, hasMore));
     }
 
+    public Result<Void> deleteReview(Long id) {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            return Result.fail("Please login first");
+        }
+        if (id == null || id <= 0) {
+            return Result.fail("Invalid review id");
+        }
+        Review review = reviewRepository.findById(id);
+        if (review == null || review.getStatus() == null || review.getStatus() != 0) {
+            return Result.fail("Review not found");
+        }
+        if (!currentUser.getId().equals(review.getUserId())) {
+            return Result.fail("No permission to delete this review");
+        }
+        int affectedRows = reviewRepository.markDeletedByIdAndUserId(id, currentUser.getId());
+        if (affectedRows == 0) {
+            return Result.fail("Delete failed");
+        }
+        return Result.ok(null);
+    }
+
     public Result<PageResultDTO<ReviewViewDTO>> queryMyReviews(Integer current) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
@@ -71,6 +139,32 @@ public class ReviewService {
 
     public List<ReviewViewDTO> queryUserReviewList(Long userId, int limit) {
         return toViewDTOList(reviewRepository.findByUserId(userId, 1, limit));
+    }
+
+    private Result<List<String>> validateCreateDTO(ReviewCreateDTO createDTO) {
+        if (createDTO == null || createDTO.getShopId() == null || createDTO.getShopId() <= 0) {
+            return Result.fail("Invalid shop id");
+        }
+        if (createDTO.getScore() == null || createDTO.getScore() < 1 || createDTO.getScore() > 5) {
+            return Result.fail("Score must be between 1 and 5");
+        }
+        if (!StringUtils.hasText(createDTO.getContent())) {
+            return Result.fail("Review content is required");
+        }
+        List<String> images = createDTO.getImages() == null ? List.of() : createDTO.getImages().stream()
+                .filter(StringUtils::hasText)
+                .map(String::trim)
+                .distinct()
+                .limit(10)
+                .toList();
+        if (images.size() > 9) {
+            return Result.fail("Images must not exceed 9 items");
+        }
+        boolean hasInvalidImage = images.stream().anyMatch(image -> image.length() > 1024);
+        if (hasInvalidImage) {
+            return Result.fail("Image url is too long");
+        }
+        return Result.ok(images);
     }
 
     private List<ReviewViewDTO> toViewDTOList(List<Review> reviews) {

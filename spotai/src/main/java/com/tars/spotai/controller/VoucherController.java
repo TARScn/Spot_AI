@@ -8,6 +8,7 @@ import com.tars.spotai.service.VoucherService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -24,6 +25,11 @@ public class VoucherController {
     @GetMapping("/voucher/activities")
     public Result<List<VoucherActivityDTO>> listActivities() {
         return voucherService.queryActivities();
+    }
+
+    @GetMapping("/voucher/activities/of/shop")
+    public Result<List<VoucherActivityDTO>> listActivitiesByShop(@RequestParam Long shopId) {
+        return voucherService.queryActivitiesByShopId(shopId);
     }
 
     @PostMapping("/voucher")

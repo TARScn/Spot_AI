@@ -54,6 +54,7 @@ public class LoginInterceptor implements HandlerInterceptor {
         String path = request.getRequestURI();
         return path.matches("^/blog/\\d+$")
                 || "/blog/hot".equals(path)
+                || "/blog/recent".equals(path)
                 || "/blog/of/user".equals(path)
                 || path.matches("^/blog/likes/\\d+$");
     }

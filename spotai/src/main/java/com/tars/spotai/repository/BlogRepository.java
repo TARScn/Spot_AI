@@ -75,6 +75,21 @@ public class BlogRepository {
         );
     }
 
+    public List<Blog> findRecentPaged(int current) {
+        int offset = offset(current);
+        return jdbcTemplate.query(
+                """
+                        select id, shop_id, user_id, title, images, content, liked, comments, create_time, update_time
+                        from tb_blog
+                        order by create_time desc, id desc
+                        limit ?, ?
+                        """,
+                new BlogRowMapper(),
+                offset,
+                PAGE_SIZE
+        );
+    }
+
     public List<Blog> findByUserId(Long userId, int current) {
         int offset = offset(current);
         return jdbcTemplate.query(
@@ -177,6 +192,10 @@ public class BlogRepository {
 
     public int decreaseLiked(Long id) {
         return jdbcTemplate.update("update tb_blog set liked = liked - 1 where id = ? and liked > 0", id);
+    }
+
+    public int deleteByIdAndUserId(Long id, Long userId) {
+        return jdbcTemplate.update("delete from tb_blog where id = ? and user_id = ?", id, userId);
     }
 
     private int offset(int current) {

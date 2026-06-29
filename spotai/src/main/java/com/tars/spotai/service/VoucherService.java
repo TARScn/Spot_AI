@@ -128,6 +128,18 @@ public class VoucherService {
         return Result.ok(activities);
     }
 
+    public Result<List<VoucherActivityDTO>> queryActivitiesByShopId(Long shopId) {
+        if (shopId == null || shopId <= 0) {
+            return Result.fail("商户ID不合法");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        List<VoucherActivityDTO> activities = voucherRepository.findAvailableActivitiesByShopId(shopId, now, 20);
+        for (VoucherActivityDTO activity : activities) {
+            activity.setActivityStatus(resolveActivityStatus(activity, now));
+        }
+        return Result.ok(activities);
+    }
+
     public Result<Long> claimVoucher(Long voucherId) {
         UserDTO user = UserHolder.getUser();
         if (user == null || user.getId() == null) {
@@ -197,13 +209,26 @@ public class VoucherService {
                 LocalDateTime.now()
         );
 
+        if (!voucherProperties.isMqEnabled()) {
+            return createSeckillOrderDirectly(message, voucherId, userId, orderId);
+        }
+
         try {
             rocketMQTemplate.syncSend(voucherProperties.getOrderTopic(), message, 3000);
+        } catch (Exception e) {
+            return createSeckillOrderDirectly(message, voucherId, userId, orderId);
+        }
+
+        return Result.ok(orderId);
+    }
+
+    private Result<Long> createSeckillOrderDirectly(VoucherOrderMessage message, Long voucherId, Long userId, Long orderId) {
+        try {
+            handleVoucherOrder(message);
         } catch (Exception e) {
             rollbackRedisSeckill(voucherId, userId, orderId, orderId, "VoucherService");
             return Result.fail("系统繁忙，请稍后重试");
         }
-
         return Result.ok(orderId);
     }
 
