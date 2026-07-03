@@ -14,6 +14,8 @@ public class AiChatResponseDTO {
     private String agentRoute;
     private boolean memoryUpdated;
     private List<AiMemoryDTO> memories = List.of();
+    private List<String> usedTools = List.of();
+    private AiToolConfirmationDTO toolConfirmation;
     private LocalDateTime generatedAt;
 
     public static AiChatResponseDTO of(String answer, String route) {
@@ -27,10 +29,24 @@ public class AiChatResponseDTO {
 
     public static AiChatResponseDTO of(String answer, String route, String agentRoute,
                                        boolean memoryUpdated, List<AiMemoryDTO> memories) {
+        return of(answer, route, agentRoute, memoryUpdated, memories, List.of());
+    }
+
+    public static AiChatResponseDTO of(String answer, String route, String agentRoute,
+                                       boolean memoryUpdated, List<AiMemoryDTO> memories, List<String> usedTools) {
         AiChatResponseDTO dto = of(answer, route);
         dto.setAgentRoute(agentRoute);
         dto.setMemoryUpdated(memoryUpdated);
         dto.setMemories(memories == null ? List.of() : memories);
+        dto.setUsedTools(usedTools == null ? List.of() : usedTools);
+        return dto;
+    }
+
+    public static AiChatResponseDTO of(String answer, String route, String agentRoute,
+                                       boolean memoryUpdated, List<AiMemoryDTO> memories,
+                                       List<String> usedTools, AiToolConfirmationDTO toolConfirmation) {
+        AiChatResponseDTO dto = of(answer, route, agentRoute, memoryUpdated, memories, usedTools);
+        dto.setToolConfirmation(toolConfirmation);
         return dto;
     }
 }

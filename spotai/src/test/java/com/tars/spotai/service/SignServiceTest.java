@@ -13,6 +13,9 @@ import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,7 +36,8 @@ class SignServiceTest {
 
     @BeforeEach
     void setUp() {
-        signService = new SignService(stringRedisTemplate);
+        Clock fixedClock = Clock.fixed(Instant.parse("2026-06-03T00:00:00Z"), ZoneId.of("Asia/Shanghai"));
+        signService = new SignService(stringRedisTemplate, fixedClock);
         UserHolder.saveUser(new UserDTO(1001L, "alice", ""));
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
     }

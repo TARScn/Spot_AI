@@ -34,6 +34,39 @@ public class AiUserMemoryRepository {
         );
     }
 
+    public List<AiUserMemory> findActiveByUserIdAndNamespace(Long userId, String namespace) {
+        return jdbcTemplate.query(
+                """
+                        select id, user_id, memory_key, memory_type, memory_json, confidence,
+                               source_message_id, source_agent, status, create_time, update_time
+                        from %s
+                        where user_id = ? and status = 1 and (memory_type = ? or memory_key like ?)
+                        order by update_time desc
+                        limit 30
+                        """.formatted(ShardUtils.aiUserMemoryTable(userId)),
+                new AiUserMemoryRowMapper(),
+                userId,
+                namespace,
+                namespace + ".%"
+        );
+    }
+
+    public AiUserMemory findActiveByUserIdAndKey(Long userId, String memoryKey) {
+        List<AiUserMemory> memories = jdbcTemplate.query(
+                """
+                        select id, user_id, memory_key, memory_type, memory_json, confidence,
+                               source_message_id, source_agent, status, create_time, update_time
+                        from %s
+                        where user_id = ? and memory_key = ? and status = 1
+                        limit 1
+                        """.formatted(ShardUtils.aiUserMemoryTable(userId)),
+                new AiUserMemoryRowMapper(),
+                userId,
+                memoryKey
+        );
+        return memories.isEmpty() ? null : memories.get(0);
+    }
+
     public void upsert(Long id, Long userId, String memoryKey, String memoryType, String memoryJson,
                        double confidence, Long sourceMessageId, String sourceAgent) {
         jdbcTemplate.update(
@@ -65,6 +98,13 @@ public class AiUserMemoryRepository {
                 "update " + ShardUtils.aiUserMemoryTable(userId) + " set status = 2 where user_id = ? and memory_key = ?",
                 userId,
                 memoryKey
+        );
+    }
+
+    public void markDeletedByUserId(Long userId) {
+        jdbcTemplate.update(
+                "update " + ShardUtils.aiUserMemoryTable(userId) + " set status = 2 where user_id = ? and status = 1",
+                userId
         );
     }
 

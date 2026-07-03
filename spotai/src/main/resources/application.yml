@@ -76,6 +76,13 @@ spotai:
     blog-prefix: blog
     public-read: true
   ai:
+    chat:
+      context-window-max-messages: ${SPOTAI_AI_CONTEXT_WINDOW_MAX_MESSAGES:12}
+      context-window-max-chars: ${SPOTAI_AI_CONTEXT_WINDOW_MAX_CHARS:2400}
+      visible-history-max-messages: ${SPOTAI_AI_VISIBLE_HISTORY_MAX_MESSAGES:20}
+      history-max-chars: ${SPOTAI_AI_HISTORY_MAX_CHARS:800}
+      memory-max-chars: ${SPOTAI_AI_MEMORY_MAX_CHARS:800}
+      memory-total-max-chars: ${SPOTAI_AI_MEMORY_TOTAL_MAX_CHARS:1600}
     review-summary:
       enabled: ${SPOTAI_AI_ENABLED:false}
       top-k: ${REVIEW_AI_TOP_K:20}
@@ -83,6 +90,9 @@ spotai:
       min-review-count: ${REVIEW_AI_MIN_REVIEW_COUNT:3}
       cache-ttl-minutes: ${REVIEW_AI_CACHE_TTL_MINUTES:60}
       max-index-reviews: ${REVIEW_AI_MAX_INDEX_REVIEWS:500}
+      refresh-scan-delay-ms: ${REVIEW_AI_REFRESH_SCAN_DELAY_MS:60000}
+      refresh-scan-initial-delay-ms: ${REVIEW_AI_REFRESH_SCAN_INITIAL_DELAY_MS:10000}
+      refresh-batch-size: ${REVIEW_AI_REFRESH_BATCH_SIZE:30}
       embedding-model: ${DASHSCOPE_EMBEDDING_MODEL:text-embedding-v3}
       index-name: review_vector_idx
       key-prefix: "review:vector:"

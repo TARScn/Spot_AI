@@ -1,18 +1,20 @@
 package com.tars.spotai.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tars.spotai.config.AiChatProperties;
 import com.tars.spotai.dto.AiChatMessageDTO;
 import com.tars.spotai.dto.AiChatRequestDTO;
 import com.tars.spotai.dto.AiChatResponseDTO;
 import com.tars.spotai.dto.AiMemoryDTO;
+import com.tars.spotai.dto.AiToolConfirmationDTO;
 import com.tars.spotai.dto.PreferenceMemoryCandidateDTO;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.ReviewSummaryDTO;
 import com.tars.spotai.dto.UserDTO;
 import com.tars.spotai.entity.AiUserMemory;
 import com.tars.spotai.repository.AiConversationRepository;
-import com.tars.spotai.repository.AiUserMemoryRepository;
 import com.tars.spotai.utils.RedisIdWorker;
 import com.tars.spotai.utils.UserHolder;
 import org.springframework.ai.chat.client.ChatClient;
@@ -24,32 +26,22 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
 public class SpringAiChatService implements AiChatService {
-    private static final int MAX_HISTORY_MESSAGES = 12;
-    private static final int MAX_HISTORY_CHARS = 800;
-    private static final int MAX_MEMORY_CHARS = 800;
+    private static final Pattern SHOP_LINK_PATTERN = Pattern.compile("spotai://shop/(\\d+)");
 
     private static final String ROUTE_CHAT = "CHAT";
     private static final String ROUTE_SHOP = "SHOP_GUIDE";
     private static final String ROUTE_REVIEW = "REVIEW_RAG";
     private static final String ROUTE_COUPON = "COUPON";
     private static final String ROUTE_ORDER = "ORDER_GUARD";
-
-    private static final Pattern BUDGET_PATTERN =
-            Pattern.compile("(\\d{1,4})\\s*(?:元|块|块钱)?\\s*(左右|以内|以下|上下|附近|内)?");
-    private static final List<String> AREA_KEYWORDS = List.of(
-            "钟楼", "小寨", "高新", "曲江", "大雁塔", "长安", "雁塔", "碑林", "未央", "莲湖", "灞桥", "西咸"
-    );
-    private static final List<String> SHOP_KEYWORDS = List.of(
-            "火锅", "烧烤", "烤肉", "串串", "面", "小吃", "咖啡", "奶茶", "甜品", "西餐", "日料", "韩餐",
-            "川菜", "陕菜", "自助", "聚餐", "早餐", "夜宵"
-    );
 
     private static final String SYSTEM_PROMPT = """
             你是 Spot AI 的本地生活助手，帮助用户理解商户、评价、优惠和探店内容。
@@ -69,37 +61,58 @@ public class SpringAiChatService implements AiChatService {
 
     private final ChatClient chatClient;
     private final AiConversationRepository conversationRepository;
-    private final AiUserMemoryRepository memoryRepository;
+    private final UserMemoryStore userMemoryStore;
     private final PreferenceExtractorAgent preferenceExtractorAgent;
     private final ShopGuideAgent shopGuideAgent;
     private final CouponAgent couponAgent;
     private final SpotAiChatTools spotAiChatTools;
+    private final ConversationSummaryAgent conversationSummaryAgent;
+    private final AiShortTermMemoryService shortTermMemoryService;
+    private final AiContextWindowService contextWindowService;
+    private final AiChatProperties aiChatProperties;
+    private final RecommendationPreferenceResolver recommendationPreferenceResolver;
+    private final AgentMemorySelectionPolicy memorySelectionPolicy;
     private final RedisIdWorker redisIdWorker;
     private final ObjectProvider<ReviewSummaryService> reviewSummaryServiceProvider;
     private final ObjectMapper objectMapper;
     private final String modelName;
+    private final ToolConfirmService toolConfirmService;
 
     public SpringAiChatService(@Qualifier("openAiChatModel") ChatModel chatModel,
                                AiConversationRepository conversationRepository,
-                               AiUserMemoryRepository memoryRepository,
+                               UserMemoryStore userMemoryStore,
                                PreferenceExtractorAgent preferenceExtractorAgent,
                                ShopGuideAgent shopGuideAgent,
                                CouponAgent couponAgent,
                                SpotAiChatTools spotAiChatTools,
+                               ConversationSummaryAgent conversationSummaryAgent,
+                               AiShortTermMemoryService shortTermMemoryService,
+                               AiContextWindowService contextWindowService,
+                               AiChatProperties aiChatProperties,
+                               RecommendationPreferenceResolver recommendationPreferenceResolver,
+                               AgentMemorySelectionPolicy memorySelectionPolicy,
                                RedisIdWorker redisIdWorker,
                                ObjectProvider<ReviewSummaryService> reviewSummaryServiceProvider,
                                ObjectMapper objectMapper,
+                               ToolConfirmService toolConfirmService,
                                @Value("${spring.ai.openai.chat.options.model:deepseek-chat}") String modelName) {
         this.chatClient = ChatClient.builder(chatModel).defaultTools(spotAiChatTools).build();
         this.conversationRepository = conversationRepository;
-        this.memoryRepository = memoryRepository;
+        this.userMemoryStore = userMemoryStore;
         this.preferenceExtractorAgent = preferenceExtractorAgent;
         this.shopGuideAgent = shopGuideAgent;
         this.couponAgent = couponAgent;
         this.spotAiChatTools = spotAiChatTools;
+        this.conversationSummaryAgent = conversationSummaryAgent;
+        this.shortTermMemoryService = shortTermMemoryService;
+        this.contextWindowService = contextWindowService;
+        this.aiChatProperties = aiChatProperties;
+        this.recommendationPreferenceResolver = recommendationPreferenceResolver;
+        this.memorySelectionPolicy = memorySelectionPolicy;
         this.redisIdWorker = redisIdWorker;
         this.reviewSummaryServiceProvider = reviewSummaryServiceProvider;
         this.objectMapper = objectMapper;
+        this.toolConfirmService = toolConfirmService;
         this.modelName = modelName;
     }
 
@@ -113,14 +126,34 @@ public class SpringAiChatService implements AiChatService {
         UserDTO currentUser = UserHolder.getUser();
         Long userId = currentUser == null ? null : currentUser.getId();
         String sessionId = userId == null ? null : conversationKey(userId);
-        List<AiChatMessageDTO> history = resolveHistory(userId, sessionId, request.getHistory());
-        List<AiUserMemory> memories = resolveMemories(userId);
+        List<AiChatMessageDTO> rawHistory = resolveRawHistory(userId, sessionId, request.getHistory());
+        List<AiChatMessageDTO> history = contextWindowService.window(rawHistory);
         String agentRoute = determineAgentRoute(request, message);
+        List<AiUserMemory> promptMemories = resolvePromptMemories(userId, agentRoute);
+        List<AiUserMemory> memories = resolveMemories(userId);
+        List<String> usedTools = new ArrayList<>();
         Long userMessageId = persistConversation(userId, sessionId, "user", message);
+
+        CouponClaimPreparation couponClaim = prepareCouponClaimIfRequested(request, message, userId);
+        if (couponClaim != null) {
+            usedTools.addAll(couponClaim.usedTools());
+            String answer = couponClaim.answer();
+            persistConversation(userId, sessionId, "assistant", answer, usedTools);
+            appendShortTermConversation(userId, sessionId, message, answer);
+            List<AiMemoryDTO> updatedMemories = extractAndPersistMemories(userId, userMessageId, message, memories);
+            return AiChatResponseDTO.of(
+                    answer,
+                    ROUTE_CHAT,
+                    ROUTE_COUPON,
+                    !updatedMemories.isEmpty(),
+                    updatedMemories,
+                    usedTools,
+                    couponClaim.confirmation());
+        }
 
         String response = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
-                .user(buildUserPrompt(request, message, agentRoute, history, memories))
+                .user(buildUserPrompt(request, message, agentRoute, history, promptMemories, usedTools))
                 .call()
                 .content();
         if (!StringUtils.hasText(response)) {
@@ -128,13 +161,289 @@ public class SpringAiChatService implements AiChatService {
         }
 
         String answer = response.strip();
-        persistConversation(userId, sessionId, "assistant", answer);
+        persistConversation(userId, sessionId, "assistant", answer, usedTools);
+        appendShortTermConversation(userId, sessionId, message, answer);
         List<AiMemoryDTO> updatedMemories = extractAndPersistMemories(userId, userMessageId, message, memories);
-        return AiChatResponseDTO.of(answer, ROUTE_CHAT, agentRoute, !updatedMemories.isEmpty(), updatedMemories);
+        AiMemoryDTO summaryMemory = summarizeOverflowHistory(userId, userMessageId, agentRoute, rawHistory, history, memories);
+        if (summaryMemory != null) {
+            updatedMemories = new ArrayList<>(updatedMemories);
+            updatedMemories.add(summaryMemory);
+        }
+        return AiChatResponseDTO.of(answer, ROUTE_CHAT, agentRoute, !updatedMemories.isEmpty(), updatedMemories, usedTools);
+    }
+
+    @Override
+    public List<AiChatMessageDTO> recentMessages(int limit) {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            throw new IllegalStateException("请先登录");
+        }
+        int safeLimit = Math.max(1, Math.min(limit, aiChatProperties.safeVisibleHistoryMaxMessages()));
+        return conversationRepository.findRecent(currentUser.getId(), conversationKey(currentUser.getId()), safeLimit);
+    }
+
+    @Override
+    public List<AiMemoryDTO> memories() {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            throw new IllegalStateException("请先登录");
+        }
+        return resolveMemories(currentUser.getId()).stream()
+                .map(memory -> AiMemoryDTO.of(
+                        memory.getMemoryKey(),
+                        memory.getMemoryType(),
+                        summarizeMemory(memory.getMemoryJson()),
+                        memory.getConfidence(),
+                        memory.getSourceAgent(),
+                        memory.getUpdateTime()))
+                .toList();
+    }
+
+    @Override
+    public void deleteMemory(String memoryKey) {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            throw new IllegalStateException("请先登录");
+        }
+        if (!StringUtils.hasText(memoryKey)) {
+            throw new IllegalArgumentException("memoryKey不能为空");
+        }
+        userMemoryStore.delete(currentUser.getId(), memoryKey);
+    }
+
+    @Override
+    public void clearMemories() {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            throw new IllegalStateException("璇峰厛鐧诲綍");
+        }
+        userMemoryStore.clear(currentUser.getId());
+    }
+
+    @Override
+    public String confirmTool(String confirmToken, boolean confirmed) {
+        return toolConfirmService.confirm(confirmToken, confirmed);
+    }
+
+    @Override
+    public void clearConversation() {
+        UserDTO currentUser = UserHolder.getUser();
+        if (currentUser == null) {
+            throw new IllegalStateException("请先登录");
+        }
+        conversationRepository.deleteBySession(currentUser.getId(), conversationKey(currentUser.getId()));
+        shortTermMemoryService.clear(conversationKey(currentUser.getId()));
+    }
+
+    private CouponClaimPreparation prepareCouponClaimIfRequested(AiChatRequestDTO request, String message, Long userId) {
+        if (!isCouponClaimIntent(message)) {
+            return null;
+        }
+
+        List<String> usedTools = new ArrayList<>();
+        if (userId == null) {
+            return new CouponClaimPreparation(
+                    "领取优惠券需要先登录。登录后再告诉我想领取哪家店的券，我会给你一个确认入口。",
+                    usedTools,
+                    null);
+        }
+
+        ResolvedShop shop = resolveShopForCouponClaim(request, message, usedTools);
+        if (shop == null || shop.id() == null || shop.id() <= 0) {
+            return new CouponClaimPreparation(
+                    "我还没有找到你要领券的店铺。可以把店名说完整一点，例如“帮我领取马坡烤肉的券”。",
+                    usedTools,
+                    null);
+        }
+
+        usedTools.add("queryCoupons");
+        JsonNode coupons = readJsonQuietly(spotAiChatTools.queryCoupons(shop.id()));
+        if (coupons == null || !coupons.isArray() || coupons.isEmpty()) {
+            String shopName = StringUtils.hasText(shop.name()) ? shop.name() : "这家店";
+            return new CouponClaimPreparation(shopName + "当前没有可领取的优惠券。", usedTools, null);
+        }
+
+        JsonNode coupon = selectCouponForMessage(coupons, message);
+        long voucherId = resolveId(coupon.path("id"));
+        if (voucherId <= 0) {
+            return new CouponClaimPreparation("我找到了优惠券，但暂时无法识别可领取的券 ID，请稍后再试。", usedTools, null);
+        }
+
+        usedTools.add("claimCoupon");
+        JsonNode claimPayload = readJsonQuietly(spotAiChatTools.claimCoupon(voucherId));
+        String confirmToken = claimPayload == null ? "" : claimPayload.path("confirmToken").asText("");
+        if (!StringUtils.hasText(confirmToken)) {
+            return new CouponClaimPreparation("我找到了优惠券，但暂时无法创建领取确认，请稍后再试。", usedTools, null);
+        }
+
+        String couponTitle = coupon.path("title").asText("优惠券");
+        String description = couponDescription(coupon);
+        String shopName = StringUtils.hasText(shop.name()) ? shop.name() : "这家店";
+        String answer = "好的，已为你找到 " + shopName + " 的可领取优惠券：**" + couponTitle + "**"
+                + (StringUtils.hasText(description) ? "（" + description + "）" : "")
+                + "。\n\n点击下方 **确定领取**，我会自动帮你领取到当前账号。";
+        AiToolConfirmationDTO confirmation = new AiToolConfirmationDTO(
+                "claimCoupon",
+                confirmToken,
+                "确定领取优惠券",
+                "点击确定后将自动领取「" + couponTitle + "」。");
+        return new CouponClaimPreparation(answer, usedTools, confirmation);
+    }
+
+    private boolean isCouponClaimIntent(String message) {
+        String text = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return containsAny(text, "领取", "领券", "帮我领", "拿券", "领一张", "claim")
+                && containsAny(text, "券", "优惠", "coupon", "voucher");
+    }
+
+    private ResolvedShop resolveShopForCouponClaim(AiChatRequestDTO request, String message, List<String> usedTools) {
+        if (request.getShopId() != null && request.getShopId() > 0) {
+            usedTools.add("queryShopDetail");
+            JsonNode detail = readJsonQuietly(spotAiChatTools.queryShopDetail(request.getShopId()));
+            String name = detail == null ? "" : detail.path("name").asText("");
+            return new ResolvedShop(request.getShopId(), name);
+        }
+
+        String keyword = extractCouponShopKeyword(message);
+        if (!StringUtils.hasText(keyword) || isContextualShopRef(keyword)) {
+            ResolvedShop fromHistory = resolveShopFromHistory(request.getHistory(), usedTools);
+            if (fromHistory != null) return fromHistory;
+            if (!StringUtils.hasText(keyword)) return null;
+        }
+        usedTools.add("searchShop");
+        ResolvedShop shop = firstShopFromSearch(spotAiChatTools.searchShop(keyword));
+        if (shop != null) {
+            return shop;
+        }
+        return firstShopFromSearch(spotAiChatTools.searchShop(message));
+    }
+
+    private boolean isContextualShopRef(String keyword) {
+        return containsAny(keyword, "当前", "本店", "这家", "那个", "这个");
+    }
+
+    private ResolvedShop resolveShopFromHistory(List<AiChatMessageDTO> history, List<String> usedTools) {
+        if (history == null || history.isEmpty()) return null;
+        for (int i = history.size() - 1; i >= 0; i--) {
+            AiChatMessageDTO msg = history.get(i);
+            if (!"assistant".equals(msg.getRole())) continue;
+            String content = msg.getContent();
+            if (content == null) continue;
+            Matcher matcher = SHOP_LINK_PATTERN.matcher(content);
+            if (matcher.find()) {
+                long shopId = Long.parseLong(matcher.group(1));
+                usedTools.add("queryShopDetail");
+                JsonNode detail = readJsonQuietly(spotAiChatTools.queryShopDetail(shopId));
+                String name = detail == null ? "" : detail.path("name").asText("");
+                if (StringUtils.hasText(name)) {
+                    return new ResolvedShop(shopId, name);
+                }
+            }
+        }
+        return null;
+    }
+
+    private ResolvedShop firstShopFromSearch(String searchResult) {
+        JsonNode shops = readJsonQuietly(searchResult);
+        if (shops == null || !shops.isArray() || shops.isEmpty()) {
+            return null;
+        }
+        JsonNode first = shops.get(0);
+        long shopId = resolveId(first.path("id"));
+        if (shopId <= 0) return null;
+        return new ResolvedShop(shopId, first.path("name").asText(""));
+    }
+
+    private long resolveId(JsonNode idNode) {
+        if (idNode == null || idNode.isMissingNode() || idNode.isNull()) return -1;
+        if (idNode.isNumber()) return idNode.asLong();
+        String text = idNode.asText();
+        if (text == null || text.isBlank()) return -1;
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private String extractCouponShopKeyword(String message) {
+        String keyword = message == null ? "" : message;
+        keyword = keyword.replaceAll("(帮我|请|麻烦|一下|可以|能不能|能否)", "");
+        keyword = keyword.replaceAll("(领取|领券|领一张|领|拿券|拿|优惠券|代金券|团购券|秒杀券|券|优惠)", "");
+        keyword = keyword.replaceAll("\\d{1,5}\\s*元?", "");
+        keyword = keyword.replaceAll("(这家|这个|那个|店铺|商家|店|的)", "");
+        keyword = keyword.replaceAll("[，。！？!?,.;；：:\\s]+", "");
+        return keyword.strip();
+    }
+
+    private JsonNode selectCouponForMessage(JsonNode coupons, String message) {
+        Long requestedAmount = firstAmount(message);
+        if (requestedAmount != null) {
+            for (JsonNode coupon : coupons) {
+                if (matchesCouponAmount(coupon, requestedAmount)) {
+                    return coupon;
+                }
+            }
+        }
+        String text = message == null ? "" : message;
+        for (JsonNode coupon : coupons) {
+            String title = coupon.path("title").asText("");
+            if (StringUtils.hasText(title) && text.contains(title)) {
+                return coupon;
+            }
+        }
+        return coupons.get(0);
+    }
+
+    private boolean matchesCouponAmount(JsonNode coupon, long amount) {
+        long cents = amount * 100;
+        return coupon.path("actualValue").asLong(-1) == cents
+                || coupon.path("payValue").asLong(-1) == cents
+                || coupon.path("title").asText("").contains(String.valueOf(amount));
+    }
+
+    private Long firstAmount(String message) {
+        Matcher matcher = Pattern.compile("(\\d{1,5})\\s*元?").matcher(message == null ? "" : message);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(matcher.group(1));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String couponDescription(JsonNode coupon) {
+        Long payValue = coupon.path("payValue").isNumber() ? coupon.path("payValue").asLong() : null;
+        Long actualValue = coupon.path("actualValue").isNumber() ? coupon.path("actualValue").asLong() : null;
+        if (payValue == null || actualValue == null) {
+            return "";
+        }
+        return "支付" + formatMoney(payValue) + "元，可抵" + formatMoney(actualValue) + "元";
+    }
+
+    private String formatMoney(long cents) {
+        if (cents % 100 == 0) {
+            return String.valueOf(cents / 100);
+        }
+        return String.format(Locale.ROOT, "%.2f", cents / 100.0);
+    }
+
+    private JsonNode readJsonQuietly(String json) {
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String buildUserPrompt(AiChatRequestDTO request, String message, String agentRoute,
-                                   List<AiChatMessageDTO> history, List<AiUserMemory> memories) {
+                                   List<AiChatMessageDTO> history, List<AiUserMemory> memories,
+                                   List<String> usedTools) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("当前子 Agent 路由：").append(agentRoute).append('\n');
         if (request.getShopId() != null && request.getShopId() > 0) {
@@ -150,8 +459,9 @@ public class SpringAiChatService implements AiChatService {
             prompt.append("店铺推荐输出要求：必须先调用 recommendShops 或 searchShop 获取店铺数据；")
                     .append("推荐店铺时必须使用 Markdown 链接格式 [店名](spotai://shop/店铺ID)，")
                     .append("并简要说明人均、评分和推荐理由。\n");
-            String recommendationContext = buildRecommendationContext(message);
+            String recommendationContext = buildRecommendationContext(message, memories);
             if (StringUtils.hasText(recommendationContext)) {
+                usedTools.add("recommendShops");
                 prompt.append("后端预筛选推荐候选：").append(recommendationContext).append('\n');
             }
         }
@@ -199,18 +509,35 @@ public class SpringAiChatService implements AiChatService {
             return "";
         }
 
-        StringBuilder builder = new StringBuilder();
-        history.stream()
+        List<String> lines = history.stream()
                 .filter(item -> item != null && StringUtils.hasText(item.getContent()))
-                .skip(Math.max(0, history.size() - MAX_HISTORY_MESSAGES))
-                .forEach(item -> {
+                .skip(Math.max(0, history.size() - aiChatProperties.safeContextWindowMaxMessages()))
+                .map(item -> {
                     String role = "assistant".equalsIgnoreCase(item.getRole()) ? "assistant" : "user";
                     String content = item.getContent().strip();
-                    if (content.length() > MAX_HISTORY_CHARS) {
-                        content = content.substring(0, MAX_HISTORY_CHARS);
+                    int maxHistoryChars = aiChatProperties.safeHistoryMaxChars();
+                    if (content.length() > maxHistoryChars) {
+                        content = content.substring(0, maxHistoryChars);
                     }
-                    builder.append(role).append(": ").append(content).append('\n');
-                });
+                    return role + ": " + content + '\n';
+                })
+                .toList();
+        List<String> selected = new ArrayList<>();
+        int totalChars = 0;
+        int maxTotalChars = aiChatProperties.safeContextWindowMaxChars();
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            String line = lines.get(i);
+            if (!selected.isEmpty() && totalChars + line.length() > maxTotalChars) {
+                break;
+            }
+            if (selected.isEmpty() && line.length() > maxTotalChars) {
+                line = line.substring(0, maxTotalChars);
+            }
+            selected.add(0, line);
+            totalChars += line.length();
+        }
+        StringBuilder builder = new StringBuilder();
+        selected.forEach(builder::append);
         return builder.toString();
     }
 
@@ -220,19 +547,27 @@ public class SpringAiChatService implements AiChatService {
         }
 
         StringBuilder builder = new StringBuilder();
-        memories.stream().limit(12).forEach(memory -> {
+        int totalChars = 0;
+        int maxTotalChars = aiChatProperties.safeMemoryTotalMaxChars();
+        for (AiUserMemory memory : memories.stream().limit(12).toList()) {
             String content = memory.getMemoryJson();
-            if (content != null && content.length() > MAX_MEMORY_CHARS) {
-                content = content.substring(0, MAX_MEMORY_CHARS);
+            int maxMemoryChars = aiChatProperties.safeMemoryMaxChars();
+            if (content != null && content.length() > maxMemoryChars) {
+                content = content.substring(0, maxMemoryChars);
             }
-            builder.append("- ")
-                    .append(memory.getMemoryKey())
-                    .append(" (confidence=")
-                    .append(memory.getConfidence())
-                    .append("): ")
-                    .append(content)
-                    .append('\n');
-        });
+            String line = "- " + memory.getMemoryKey()
+                    + " (confidence=" + memory.getConfidence() + "): "
+                    + content
+                    + '\n';
+            if (builder.length() > 0 && totalChars + line.length() > maxTotalChars) {
+                break;
+            }
+            if (builder.length() == 0 && line.length() > maxTotalChars) {
+                line = line.substring(0, maxTotalChars);
+            }
+            builder.append(line);
+            totalChars += line.length();
+        }
         return builder.toString();
     }
 
@@ -258,72 +593,63 @@ public class SpringAiChatService implements AiChatService {
         }
     }
 
-    private String buildRecommendationContext(String message) {
-        if (!StringUtils.hasText(message) || !isRecommendationIntent(message)) {
+    private String buildRecommendationContext(String message, List<AiUserMemory> memories) {
+        if (!StringUtils.hasText(message) || !recommendationPreferenceResolver.isRecommendationIntent(message)) {
             return "";
         }
 
-        long[] range = parseBudgetRange(message);
-        if (range == null) {
+        RecommendationPreferenceResolver.RecommendationPreference preference =
+                recommendationPreferenceResolver.resolve(message, memories);
+        if (!preference.hasAny()) {
             return "";
         }
-        return spotAiChatTools.recommendShops(range[0], range[1], parseKeyword(message), parseArea(message), 5);
+        return spotAiChatTools.recommendShops(
+                preference.minPrice(),
+                preference.maxPrice(),
+                preference.keyword(),
+                preference.area(),
+                5);
     }
 
-    private boolean isRecommendationIntent(String message) {
-        String lower = message.toLowerCase(Locale.ROOT);
-        return containsAny(lower, "推荐", "找", "附近", "哪家", "人均", "吃", "喝", "recommend");
-    }
-
-    private long[] parseBudgetRange(String message) {
-        Matcher matcher = BUDGET_PATTERN.matcher(message);
-        while (matcher.find()) {
-            long value;
-            try {
-                value = Long.parseLong(matcher.group(1));
-            } catch (NumberFormatException ignored) {
-                continue;
-            }
-            if (value <= 0) {
-                continue;
-            }
-
-            String qualifier = matcher.group(2);
-            if (qualifier != null && (qualifier.contains("左右")
-                    || qualifier.contains("上下")
-                    || qualifier.contains("附近"))) {
-                long delta = Math.max(10, Math.round(value * 0.2));
-                return new long[]{Math.max(1, value - delta), value + delta};
-            }
-            return new long[]{0, value};
-        }
-        return null;
-    }
-
-    private String parseArea(String message) {
-        return AREA_KEYWORDS.stream()
-                .filter(message::contains)
-                .findFirst()
-                .orElse("");
-    }
-
-    private String parseKeyword(String message) {
-        return SHOP_KEYWORDS.stream()
-                .filter(message::contains)
-                .findFirst()
-                .orElse("");
-    }
-
-    private List<AiChatMessageDTO> resolveHistory(Long userId, String sessionId, List<AiChatMessageDTO> requestHistory) {
+    private List<AiChatMessageDTO> resolveRawHistory(Long userId, String sessionId, List<AiChatMessageDTO> requestHistory) {
+        List<AiChatMessageDTO> history;
         if (userId == null) {
-            return requestHistory == null ? List.of() : requestHistory;
+            history = requestHistory == null ? List.of() : requestHistory;
+        } else {
+            try {
+                List<AiChatMessageDTO> shortTermHistory = shortTermMemoryService.get(sessionId);
+                if (!shortTermHistory.isEmpty()) {
+                    return shortTermHistory;
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                List<AiChatMessageDTO> persisted = conversationRepository.findRecent(
+                        userId,
+                        sessionId,
+                        conversationHistoryFetchLimit());
+                history = persisted.isEmpty() ? (requestHistory == null ? List.of() : requestHistory) : persisted;
+            } catch (Exception ignored) {
+                history = requestHistory == null ? List.of() : requestHistory;
+            }
+        }
+        return history;
+    }
+
+    private void appendShortTermConversation(Long userId, String sessionId, String userMessage, String assistantMessage) {
+        if (userId == null) {
+            return;
         }
         try {
-            List<AiChatMessageDTO> persisted = conversationRepository.findRecent(userId, sessionId, MAX_HISTORY_MESSAGES);
-            return persisted.isEmpty() ? (requestHistory == null ? List.of() : requestHistory) : persisted;
+            shortTermMemoryService.addUserMessage(sessionId, userMessage);
+            shortTermMemoryService.addAssistantMessage(sessionId, assistantMessage);
         } catch (Exception ignored) {
-            return requestHistory == null ? List.of() : requestHistory;
         }
+    }
+
+    private int conversationHistoryFetchLimit() {
+        int window = aiChatProperties.safeContextWindowMaxMessages();
+        return Math.min(30, Math.max(window + 1, window * 2));
     }
 
     private List<AiUserMemory> resolveMemories(Long userId) {
@@ -331,20 +657,55 @@ public class SpringAiChatService implements AiChatService {
             return List.of();
         }
         try {
-            return memoryRepository.findActiveByUserId(userId);
+            return userMemoryStore.findActive(userId);
         } catch (Exception ignored) {
             return List.of();
         }
     }
 
+    private List<AiUserMemory> resolvePromptMemories(Long userId, String agentRoute) {
+        if (userId == null) {
+            return List.of();
+        }
+        Map<String, AiUserMemory> scopedMemories = new LinkedHashMap<>();
+        for (String namespace : memorySelectionPolicy.allowedNamespaces(agentRoute)) {
+            try {
+                List<AiUserMemory> memories = userMemoryStore.findActive(userId, namespace);
+                if (memories == null) {
+                    continue;
+                }
+                for (AiUserMemory memory : memories) {
+                    String identity = memorySelectionPolicy.identityOf(memory);
+                    if (!StringUtils.hasText(identity)) {
+                        continue;
+                    }
+                    if (scopedMemories.containsKey(identity)) {
+                        scopedMemories.remove(identity);
+                    }
+                    scopedMemories.put(identity, memory);
+                }
+            } catch (Exception ignored) {
+                return memorySelectionPolicy.selectForPrompt(agentRoute, resolveMemories(userId));
+            }
+        }
+        if (!scopedMemories.isEmpty()) {
+            return new ArrayList<>(scopedMemories.values());
+        }
+        return memorySelectionPolicy.selectForPrompt(agentRoute, resolveMemories(userId));
+    }
+
     private Long persistConversation(Long userId, String sessionId, String role, String content) {
+        return persistConversation(userId, sessionId, role, content, List.of());
+    }
+
+    private Long persistConversation(Long userId, String sessionId, String role, String content, List<String> usedTools) {
         if (userId == null || !StringUtils.hasText(content)) {
             return null;
         }
 
         try {
             Long id = redisIdWorker.nextId("ai_conversation");
-            conversationRepository.save(id, userId, sessionId, role, truncate(content, 4000), "text", modelName);
+            conversationRepository.save(id, userId, sessionId, role, truncate(content, 4000), "text", modelName, usedTools);
             return id;
         } catch (Exception ignored) {
             return null;
@@ -366,30 +727,36 @@ public class SpringAiChatService implements AiChatService {
 
             List<AiMemoryDTO> updated = new ArrayList<>();
             for (PreferenceMemoryCandidateDTO candidate : candidates) {
+                UserMemoryKey memoryKey = UserMemoryKey.fromLegacy(candidate.getMemoryKey(), candidate.getMemoryType());
                 if ("DELETE".equalsIgnoreCase(candidate.getAction())) {
-                    memoryRepository.markDeleted(userId, candidate.getMemoryKey());
+                    userMemoryStore.delete(userId, memoryKey.namespace(), memoryKey.key());
                     updated.add(AiMemoryDTO.of(
-                            candidate.getMemoryKey(),
-                            candidate.getMemoryType(),
+                            memoryKey.physicalKey(),
+                            memoryKey.namespace(),
                             "已删除偏好",
                             candidate.getConfidence()));
                     continue;
                 }
 
                 String memoryJson = toJson(candidate.getValue());
-                memoryRepository.upsert(
+                if (!isMeaningfulMemoryJson(memoryJson)) {
+                    continue;
+                }
+                if (shouldSkipMemoryWrite(existingMemories, memoryKey, memoryJson, candidate.getConfidence())) {
+                    continue;
+                }
+                userMemoryStore.put(new UserMemoryStore.MemoryWriteCommand(
                         redisIdWorker.nextId("ai_user_memory"),
                         userId,
-                        candidate.getMemoryKey(),
-                        candidate.getMemoryType(),
+                        memoryKey.namespace(),
+                        memoryKey.key(),
                         memoryJson,
                         candidate.getConfidence(),
                         sourceMessageId,
-                        PreferenceExtractorAgent.AGENT_NAME
-                );
+                        PreferenceExtractorAgent.AGENT_NAME));
                 updated.add(AiMemoryDTO.of(
-                        candidate.getMemoryKey(),
-                        candidate.getMemoryType(),
+                        memoryKey.physicalKey(),
+                        memoryKey.namespace(),
                         summarizeMemory(memoryJson),
                         candidate.getConfidence()));
             }
@@ -397,6 +764,163 @@ public class SpringAiChatService implements AiChatService {
         } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private boolean isMeaningfulMemoryJson(String memoryJson) {
+        if (!StringUtils.hasText(memoryJson)) {
+            return false;
+        }
+        try {
+            return isMeaningfulMemoryNode(objectMapper.readTree(memoryJson));
+        } catch (Exception ignored) {
+            return StringUtils.hasText(memoryJson.strip());
+        }
+    }
+
+    private boolean isMeaningfulMemoryNode(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return false;
+        }
+        if (node.isTextual()) {
+            return StringUtils.hasText(node.asText());
+        }
+        if (node.isNumber() || node.isBoolean()) {
+            return true;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                if (isMeaningfulMemoryNode(child)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node.isObject()) {
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                if (isMemoryMetadataField(field.getKey())) {
+                    continue;
+                }
+                if (isMeaningfulMemoryNode(field.getValue())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isMemoryMetadataField(String key) {
+        return List.of("source", "confidence", "memorySource", "agentRoute").contains(key);
+    }
+
+    private boolean shouldSkipMemoryWrite(List<AiUserMemory> existingMemories, UserMemoryKey memoryKey,
+                                          String nextJson, double nextConfidence) {
+        if (existingMemories == null || existingMemories.isEmpty()) {
+            return false;
+        }
+        for (AiUserMemory existing : existingMemories) {
+            if (!sameMemoryKey(existing, memoryKey)) {
+                continue;
+            }
+            if (!jsonEquivalent(existing.getMemoryJson(), nextJson)) {
+                return false;
+            }
+            double existingConfidence = existing.getConfidence() == null ? 0 : existing.getConfidence();
+            return existingConfidence >= nextConfidence;
+        }
+        return false;
+    }
+
+    private boolean sameMemoryKey(AiUserMemory existing, UserMemoryKey memoryKey) {
+        if (existing == null || memoryKey == null) {
+            return false;
+        }
+        try {
+            UserMemoryKey existingKey = UserMemoryKey.fromLegacy(existing.getMemoryKey(), existing.getMemoryType());
+            return existingKey.namespace().equals(memoryKey.namespace()) && existingKey.key().equals(memoryKey.key());
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    private boolean jsonEquivalent(String left, String right) {
+        if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
+            return false;
+        }
+        try {
+            JsonNode leftNode = objectMapper.readTree(left);
+            JsonNode rightNode = objectMapper.readTree(right);
+            return leftNode.equals(rightNode);
+        } catch (Exception ignored) {
+            return left.equals(right);
+        }
+    }
+
+    private AiMemoryDTO summarizeOverflowHistory(Long userId, Long sourceMessageId, String agentRoute,
+                                                 List<AiChatMessageDTO> rawHistory,
+                                                 List<AiChatMessageDTO> windowHistory,
+                                                 List<AiUserMemory> existingMemories) {
+        if (userId == null || rawHistory == null || rawHistory.isEmpty() || windowHistory == null) {
+            return null;
+        }
+        int overflowCount = rawHistory.size() - windowHistory.size();
+        if (overflowCount <= 0) {
+            return null;
+        }
+        Map<String, Object> value = buildConversationSummaryValue(agentRoute, rawHistory.subList(0, overflowCount));
+        if (value.isEmpty()) {
+            return null;
+        }
+        try {
+            value.put("agentRoute", agentRoute);
+            value.put("memorySource", "overflow_history");
+            String memoryJson = toJson(value);
+            UserMemoryKey memoryKey = UserMemoryKey.of("conversation.summary", "default");
+            if (shouldSkipMemoryWrite(existingMemories, memoryKey, memoryJson, 0.7)) {
+                return null;
+            }
+            userMemoryStore.put(new UserMemoryStore.MemoryWriteCommand(
+                    redisIdWorker.nextId("ai_user_memory"),
+                    userId,
+                    memoryKey.namespace(),
+                    memoryKey.key(),
+                    memoryJson,
+                    0.7,
+                    sourceMessageId,
+                    ConversationSummaryAgent.AGENT_NAME));
+            return AiMemoryDTO.of("conversation.summary.default", "conversation.summary", summarizeMemory(memoryJson), 0.7);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Map<String, Object> buildConversationSummaryValue(String agentRoute, List<AiChatMessageDTO> overflowHistory) {
+        Map<String, Object> summary = conversationSummaryAgent.summarize(agentRoute, overflowHistory);
+        if (summary != null && !summary.isEmpty()) {
+            return new LinkedHashMap<>(summary);
+        }
+        String fallbackSummary = buildRuleBasedConversationSummary(overflowHistory);
+        if (!StringUtils.hasText(fallbackSummary)) {
+            return Map.of();
+        }
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("summary", fallbackSummary);
+        value.put("confidence", 0.7);
+        value.put("source", "rule");
+        return value;
+    }
+
+    private String buildRuleBasedConversationSummary(List<AiChatMessageDTO> overflowHistory) {
+        StringBuilder builder = new StringBuilder();
+        overflowHistory.stream()
+                .filter(item -> item != null && StringUtils.hasText(item.getContent()))
+                .forEach(item -> {
+                    String role = "assistant".equalsIgnoreCase(item.getRole()) ? "AI" : "用户";
+                    String content = truncate(item.getContent().strip().replaceAll("\\s+", " "), 120);
+                    builder.append(role).append(": ").append(content).append("；");
+                });
+        return truncate(builder.toString(), 800);
     }
 
     private String determineAgentRoute(AiChatRequestDTO request, String message) {
@@ -448,4 +972,12 @@ public class SpringAiChatService implements AiChatService {
         }
         return content.substring(0, maxChars);
     }
+
+    private record CouponClaimPreparation(String answer, List<String> usedTools,
+                                          AiToolConfirmationDTO confirmation) {
+    }
+
+    private record ResolvedShop(Long id, String name) {
+    }
+
 }

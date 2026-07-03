@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tars.spotai.config.ReviewAiProperties;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.ReviewSummaryDTO;
+import com.tars.spotai.entity.ReviewSummary;
 import com.tars.spotai.entity.Shop;
 import com.tars.spotai.repository.ReviewRepository;
+import com.tars.spotai.repository.ReviewSummaryRepository;
 import com.tars.spotai.repository.ShopRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +34,8 @@ class ReviewSummaryServiceTest {
 
     @Mock
     private ReviewRepository reviewRepository;
+    @Mock
+    private ReviewSummaryRepository summaryRepository;
     @Mock
     private ShopRepository shopRepository;
     @Mock
@@ -68,10 +73,10 @@ class ReviewSummaryServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         ReviewSummaryDTO cached = ReviewSummaryDTO.ready(
                 1L,
-                "整体评价稳定",
-                List.of("口味好"),
-                List.of("高峰期排队"),
-                List.of("朋友聚餐"),
+                "cached summary",
+                List.of("taste"),
+                List.of("queue"),
+                List.of("friends"),
                 12
         );
         when(shopRepository.findById(1L)).thenReturn(shop(1L));
@@ -80,13 +85,68 @@ class ReviewSummaryServiceTest {
         Result<ReviewSummaryDTO> result = service(Optional.of(summaryGenerator)).querySummary(1L);
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getData().getSummary()).isEqualTo("整体评价稳定");
+        assertThat(result.getData().getSummary()).isEqualTo("cached summary");
+        verify(summaryRepository, never()).findByShopId(any());
         verify(reviewRepository, never()).countActiveWithContentByShopId(any());
         verify(summaryGenerator, never()).generate(any());
     }
 
     @Test
-    void returnsInsufficientStatusWhenThereAreTooFewReviews() {
+    void returnsPersistedSummaryWithoutCallingAi() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(shopRepository.findById(1L)).thenReturn(shop(1L));
+        ReviewSummary persisted = persistedReadySummary();
+        when(summaryRepository.findByShopId(1L)).thenReturn(persisted);
+
+        Result<ReviewSummaryDTO> result = service(Optional.of(summaryGenerator)).querySummary(1L);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getData().getSummary()).isEqualTo("persisted summary");
+        assertThat(result.getData().getHighlights()).containsExactly("stable");
+        assertThat(result.getData().getScenes()).containsExactly("date");
+        verify(reviewRepository, never()).countActiveWithContentByShopId(any());
+        verify(summaryGenerator, never()).generate(any());
+    }
+
+    @Test
+    void returnsPersistedSummaryEvenWhenExpireAtIsInThePast() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(shopRepository.findById(1L)).thenReturn(shop(1L));
+        ReviewSummary persisted = persistedReadySummary();
+        persisted.setExpireAt(LocalDateTime.now().minusDays(1));
+        when(summaryRepository.findByShopId(1L)).thenReturn(persisted);
+
+        Result<ReviewSummaryDTO> result = service(Optional.of(summaryGenerator)).querySummary(1L);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getData().getStatus()).isEqualTo(ReviewSummaryDTO.STATUS_READY);
+        assertThat(result.getData().getSummary()).isEqualTo("persisted summary");
+        verify(summaryGenerator, never()).generate(any());
+    }
+
+    @Test
+    void querySummaryGeneratesImmediatelyWhenSummaryIsMissing() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(shopRepository.findById(1L)).thenReturn(shop(1L));
+        when(reviewRepository.countActiveWithContentByShopId(1L)).thenReturn(8);
+        when(summaryGenerator.generate(1L)).thenReturn(new ReviewSummaryContent(
+                "generated on first view",
+                List.of("fresh"),
+                List.of(),
+                List.of("friends")
+        ));
+
+        Result<ReviewSummaryDTO> result = service(Optional.of(summaryGenerator)).querySummary(1L);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getData().getStatus()).isEqualTo(ReviewSummaryDTO.STATUS_READY);
+        assertThat(result.getData().getSummary()).isEqualTo("generated on first view");
+        verify(ragIndexService).indexMissingReviews(1L);
+        verify(summaryGenerator).generate(1L);
+    }
+
+    @Test
+    void returnsInsufficientStatusWhenThereAreTooFewReviewsAndPersistsIt() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(shopRepository.findById(1L)).thenReturn(shop(1L));
         when(reviewRepository.countActiveWithContentByShopId(1L)).thenReturn(2);
@@ -96,42 +156,30 @@ class ReviewSummaryServiceTest {
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getData().getStatus()).isEqualTo(ReviewSummaryDTO.STATUS_INSUFFICIENT_REVIEWS);
         assertThat(result.getData().getReviewCount()).isEqualTo(2);
+        verify(summaryRepository).upsert(any(ReviewSummary.class));
         verify(ragIndexService, never()).indexMissingReviews(any());
         verify(summaryGenerator, never()).generate(any());
     }
 
     @Test
-    void returnsUnavailableStatusWhenAiIsDisabled() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        properties.setEnabled(false);
-        when(shopRepository.findById(1L)).thenReturn(shop(1L));
-        when(reviewRepository.countActiveWithContentByShopId(1L)).thenReturn(8);
-
-        Result<ReviewSummaryDTO> result = service(Optional.empty()).querySummary(1L);
-
-        assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getData().getStatus()).isEqualTo(ReviewSummaryDTO.STATUS_UNAVAILABLE);
-        verify(ragIndexService, never()).indexMissingReviews(any());
-    }
-
-    @Test
-    void indexesReviewsGeneratesSummaryAndCachesResult() throws Exception {
+    void refreshSummaryIndexesReviewsGeneratesSummaryPersistsAndCachesResult() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(shopRepository.findById(1L)).thenReturn(shop(1L));
         when(reviewRepository.countActiveWithContentByShopId(1L)).thenReturn(8);
         when(summaryGenerator.generate(1L)).thenReturn(new ReviewSummaryContent(
-                "整体评价较好",
-                List.of("口味稳定"),
-                List.of("排队较久"),
-                List.of("家庭聚餐")
+                "generated summary",
+                List.of("stable"),
+                List.of("queue"),
+                List.of("family")
         ));
 
-        Result<ReviewSummaryDTO> result = service(Optional.of(summaryGenerator)).querySummary(1L);
+        Result<ReviewSummaryDTO> result = service(Optional.of(summaryGenerator)).refreshSummaryNow(1L);
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getData().getStatus()).isEqualTo(ReviewSummaryDTO.STATUS_READY);
-        assertThat(result.getData().getReviewCount()).isEqualTo(8);
-        assertThat(result.getData().getSummary()).isEqualTo("整体评价较好");
+        assertThat(result.getData().getSummary()).isEqualTo("generated summary");
+        verify(summaryRepository).markBuilding(1L);
+        verify(summaryRepository).upsert(any(ReviewSummary.class));
         verify(ragIndexService).indexMissingReviews(1L);
         verify(valueOperations).set(
                 eq("review:summary:1"),
@@ -141,9 +189,20 @@ class ReviewSummaryServiceTest {
         );
     }
 
+    @Test
+    void markStaleUpdatesMysqlAndDeletesRedisCache() {
+        ReviewSummaryService service = service(Optional.of(summaryGenerator));
+
+        service.markStale(1L);
+
+        verify(summaryRepository).markStale(1L);
+        verify(redisTemplate).delete("review:summary:1");
+    }
+
     private ReviewSummaryService service(Optional<ReviewSummaryGenerator> generator) {
         return new ReviewSummaryService(
                 reviewRepository,
+                summaryRepository,
                 shopRepository,
                 Optional.of(ragIndexService),
                 generator,
@@ -153,10 +212,22 @@ class ReviewSummaryServiceTest {
         );
     }
 
+    private ReviewSummary persistedReadySummary() {
+        ReviewSummary persisted = new ReviewSummary();
+        persisted.setShopId(1L);
+        persisted.setStatus(ReviewSummaryDTO.STATUS_READY);
+        persisted.setSummary("persisted summary");
+        persisted.setHighlightsJson("[\"stable\"]");
+        persisted.setWeaknessesJson("[]");
+        persisted.setScenesJson("[\"date\"]");
+        persisted.setReviewCount(9);
+        return persisted;
+    }
+
     private Shop shop(Long id) {
         Shop shop = new Shop();
         shop.setId(id);
-        shop.setName("测试商户");
+        shop.setName("Test shop");
         return shop;
     }
 }

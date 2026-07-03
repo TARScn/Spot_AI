@@ -37,12 +37,17 @@ class ReviewServiceTest {
     private UserRepository userRepository;
     @Mock
     private RedisIdWorker redisIdWorker;
+    @Mock
+    private ReviewSummaryService reviewSummaryService;
+    @Mock
+    private ReviewSummaryRefreshScheduler reviewSummaryRefreshScheduler;
 
     private ReviewService reviewService;
 
     @BeforeEach
     void setUp() {
-        reviewService = new ReviewService(reviewRepository, shopRepository, userRepository, redisIdWorker);
+        reviewService = new ReviewService(reviewRepository, shopRepository, userRepository, redisIdWorker,
+                reviewSummaryService, reviewSummaryRefreshScheduler);
     }
 
     @AfterEach
@@ -69,6 +74,8 @@ class ReviewServiceTest {
         assertThat(captor.getValue().getScore()).isEqualTo(5);
         assertThat(captor.getValue().getImagesCount()).isEqualTo(2);
         verify(reviewRepository).saveImages(9001L, List.of(9101L, 9102L), createDTO.getImages());
+        verify(reviewSummaryService).markStale(1L);
+        verify(reviewSummaryRefreshScheduler).refreshAsync(1L);
     }
 
     @Test
@@ -91,6 +98,8 @@ class ReviewServiceTest {
 
         assertThat(result.isSuccess()).isTrue();
         verify(reviewRepository).markDeletedByIdAndUserId(9001L, 1001L);
+        verify(reviewSummaryService).markStale(1L);
+        verify(reviewSummaryRefreshScheduler).refreshAsync(1L);
     }
 
     @Test
@@ -117,6 +126,7 @@ class ReviewServiceTest {
         Review review = new Review();
         review.setId(id);
         review.setUserId(userId);
+        review.setShopId(1L);
         review.setStatus(0);
         return review;
     }

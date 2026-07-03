@@ -11,13 +11,29 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class SpringAiPreferenceExtractorAgent implements PreferenceExtractorAgent {
     private static final int MAX_MESSAGE_CHARS = 1200;
     private static final int MAX_VALUE_CHARS = 600;
+    private static final Pattern BUDGET_PATTERN = Pattern.compile(
+            "(?:人均|预算|消费|价格)\\s*(\\d{1,4})\\s*(?:元|块|块钱)?\\s*(左右|上下|附近|以内|以下)?"
+                    + "|(\\d{1,4})\\s*(?:元|块|块钱)\\s*(左右|上下|附近|以内|以下)?");
+    private static final List<String> AREA_KEYWORDS = List.of(
+            "钟楼", "小寨", "高新", "曲江", "大雁塔", "长安", "雁塔", "碑林", "未央", "莲湖", "灞桥", "西咸");
+    private static final List<String> SHOP_KEYWORDS = List.of(
+            "火锅", "烧烤", "烤肉", "串串", "面", "小吃", "咖啡", "奶茶", "甜品", "西餐", "日料", "韩餐",
+            "川菜", "陕菜", "自助", "聚餐", "早餐", "夜宵", "KTV", "电影", "酒店");
+    private static final List<String> MEMORY_DELETE_KEYWORDS = List.of(
+            "删除", "忘记", "别记", "不要记", "清除", "forget", "delete");
     private static final String SYSTEM_PROMPT = """
             你是 Spot AI 的 PreferenceExtractorAgent，只负责从用户消息中抽取可长期复用的本地生活偏好。
             只允许抽取餐饮/本地生活相关的稳定偏好，例如口味、环境、预算、常去区域、排队禁忌、优惠偏好。
@@ -48,12 +64,20 @@ public class SpringAiPreferenceExtractorAgent implements PreferenceExtractorAgen
         if (message.length() > MAX_MESSAGE_CHARS) {
             message = message.substring(0, MAX_MESSAGE_CHARS);
         }
-        String content = chatClient.prompt()
-                .system(SYSTEM_PROMPT)
-                .user(buildPrompt(userId, message, existingMemories))
-                .call()
-                .content();
-        return parseCandidates(content);
+        String content = "";
+        try {
+            content = chatClient.prompt()
+                    .system(SYSTEM_PROMPT)
+                    .user(buildPrompt(userId, message, existingMemories))
+                    .call()
+                    .content();
+        } catch (Exception ignored) {
+            // Rule-based extraction below keeps key recommendation preferences available
+            // when the LLM fails, times out, or returns non-JSON content.
+        }
+        List<PreferenceMemoryCandidateDTO> candidates = new ArrayList<>(parseCandidates(content));
+        addRuleBasedCandidates(message, candidates);
+        return candidates;
     }
 
     private String buildPrompt(Long userId, String latestUserMessage, List<AiUserMemory> existingMemories) {
@@ -166,5 +190,97 @@ public class SpringAiPreferenceExtractorAgent implements PreferenceExtractorAgen
                  "dining.avoid.keyword" -> true;
             default -> false;
         };
+    }
+
+    private void addRuleBasedCandidates(String message, List<PreferenceMemoryCandidateDTO> candidates) {
+        if (!StringUtils.hasText(message) || containsAny(message, MEMORY_DELETE_KEYWORDS)) {
+            return;
+        }
+        Set<String> existingKeys = new HashSet<>();
+        for (PreferenceMemoryCandidateDTO candidate : candidates) {
+            if (candidate != null && StringUtils.hasText(candidate.getMemoryKey())) {
+                existingKeys.add(candidate.getMemoryKey());
+            }
+        }
+
+        if (!existingKeys.contains("dining.preference.budget")) {
+            long[] budget = parseBudgetRange(message);
+            if (budget != null) {
+                Map<String, Object> value = new LinkedHashMap<>();
+                value.put("min", budget[0]);
+                value.put("max", budget[1]);
+                value.put("source", "rule");
+                candidates.add(candidate("dining.preference.budget", value, 0.82));
+                existingKeys.add("dining.preference.budget");
+            }
+        }
+
+        if (!existingKeys.contains("dining.preference.area")) {
+            String area = firstKeyword(message, AREA_KEYWORDS);
+            if (StringUtils.hasText(area)) {
+                Map<String, Object> value = new LinkedHashMap<>();
+                value.put("area", area);
+                value.put("source", "rule");
+                candidates.add(candidate("dining.preference.area", value, 0.78));
+                existingKeys.add("dining.preference.area");
+            }
+        }
+
+        if (!existingKeys.contains("dining.preference.taste")) {
+            String keyword = firstKeyword(message, SHOP_KEYWORDS);
+            if (StringUtils.hasText(keyword) && !message.contains("不喜欢" + keyword) && !message.contains("不吃" + keyword)) {
+                Map<String, Object> value = new LinkedHashMap<>();
+                value.put("keyword", keyword);
+                value.put("source", "rule");
+                candidates.add(candidate("dining.preference.taste", value, 0.78));
+            }
+        }
+    }
+
+    private long[] parseBudgetRange(String message) {
+        Matcher matcher = BUDGET_PATTERN.matcher(message);
+        while (matcher.find()) {
+            long value;
+            try {
+                String valueText = matcher.group(1) != null ? matcher.group(1) : matcher.group(3);
+                value = Long.parseLong(valueText);
+            } catch (NumberFormatException ignored) {
+                continue;
+            }
+            if (value <= 0) {
+                continue;
+            }
+            String qualifier = matcher.group(2) != null ? matcher.group(2) : matcher.group(4);
+            if (qualifier != null && (qualifier.contains("左右")
+                    || qualifier.contains("上下")
+                    || qualifier.contains("附近"))) {
+                long delta = Math.max(10, Math.round(value * 0.2));
+                return new long[]{Math.max(1, value - delta), value + delta};
+            }
+            return new long[]{0, value};
+        }
+        return null;
+    }
+
+    private String firstKeyword(String message, List<String> keywords) {
+        return keywords.stream()
+                .filter(message::contains)
+                .findFirst()
+                .orElse("");
+    }
+
+    private boolean containsAny(String text, List<String> keywords) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        return keywords.stream().anyMatch(keyword -> lower.contains(keyword.toLowerCase(Locale.ROOT)));
+    }
+
+    private PreferenceMemoryCandidateDTO candidate(String key, Map<String, Object> value, double confidence) {
+        PreferenceMemoryCandidateDTO candidate = new PreferenceMemoryCandidateDTO();
+        candidate.setMemoryKey(key);
+        candidate.setMemoryType("preference");
+        candidate.setValue(value);
+        candidate.setConfidence(confidence);
+        candidate.setAction("UPSERT");
+        return candidate;
     }
 }

@@ -40,7 +40,7 @@ public class ReviewSummaryAdminController {
             return Result.fail("评论 AI 功能未启用");
         }
         int indexed = ragIndexService.get().reindexShop(shopId);
-        summaryService.evictSummary(shopId);
+        summaryService.refreshSummaryNow(shopId);
         return Result.ok(indexed);
     }
 

@@ -14,6 +14,8 @@ import com.tars.spotai.utils.RedisIdWorker;
 import com.tars.spotai.utils.UserHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -28,15 +30,21 @@ public class ReviewService {
     private final ShopRepository shopRepository;
     private final UserRepository userRepository;
     private final RedisIdWorker redisIdWorker;
+    private final ReviewSummaryService reviewSummaryService;
+    private final ReviewSummaryRefreshScheduler reviewSummaryRefreshScheduler;
 
     public ReviewService(ReviewRepository reviewRepository,
                          ShopRepository shopRepository,
                          UserRepository userRepository,
-                         RedisIdWorker redisIdWorker) {
+                         RedisIdWorker redisIdWorker,
+                         ReviewSummaryService reviewSummaryService,
+                         ReviewSummaryRefreshScheduler reviewSummaryRefreshScheduler) {
         this.reviewRepository = reviewRepository;
         this.shopRepository = shopRepository;
         this.userRepository = userRepository;
         this.redisIdWorker = redisIdWorker;
+        this.reviewSummaryService = reviewSummaryService;
+        this.reviewSummaryRefreshScheduler = reviewSummaryRefreshScheduler;
     }
 
     @Transactional
@@ -74,6 +82,7 @@ public class ReviewService {
                     .toList();
             reviewRepository.saveImages(reviewId, imageIds, images);
         }
+        markSummaryStaleAndRefreshAfterCommit(createDTO.getShopId());
         return Result.ok(reviewId);
     }
 
@@ -119,6 +128,7 @@ public class ReviewService {
         if (affectedRows == 0) {
             return Result.fail("Delete failed");
         }
+        markSummaryStaleAndRefreshAfterCommit(review.getShopId());
         return Result.ok(null);
     }
 
@@ -192,5 +202,19 @@ public class ReviewService {
             dto.setUserIcon(user.getIcon());
         }
         return dto;
+    }
+
+    private void markSummaryStaleAndRefreshAfterCommit(Long shopId) {
+        reviewSummaryService.markStale(shopId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    reviewSummaryRefreshScheduler.refreshAsync(shopId);
+                }
+            });
+            return;
+        }
+        reviewSummaryRefreshScheduler.refreshAsync(shopId);
     }
 }

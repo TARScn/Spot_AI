@@ -21,7 +21,6 @@ import {
 import {
   businesses as mockBusinesses,
   categories as mockCategories,
-  cityOptions,
   districts,
   filters,
   rankings
@@ -29,7 +28,10 @@ import {
 import './styles.css'
 
 const tokenKey = 'spotai_token'
+const aiGuestHistoryKey = 'spotai_ai_guest_history'
 const userLocation = { x: '108.916860', y: '34.229210' }
+const aiGreeting = '你好，我是 Spot AI 助手。可以帮你找店、比较评价、查询人均和优惠。'
+const aiChatTimeoutMs = 45000
 
 const categoryIconMap = {
   food: Utensils,
@@ -106,6 +108,22 @@ const emptyReviewDraft = {
   images: []
 }
 
+function initialAiMessages() {
+  return [
+    {
+      id: createMessageId(),
+      role: 'assistant',
+      content: aiGreeting,
+      generatedAt: new Date().toISOString()
+    }
+  ]
+}
+
+function createMessageId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 async function api(path, options = {}) {
   const token = localStorage.getItem(tokenKey)
   const headers = { ...(options.headers || {}) }
@@ -167,6 +185,13 @@ function App() {
   const [user, setUser] = useState(null)
   const [profileData, setProfileData] = useState(null)
   const [profileLoading, setProfileLoading] = useState(false)
+  const [aiMemories, setAiMemories] = useState([])
+  const [aiMemoryLoading, setAiMemoryLoading] = useState(false)
+  const [aiMemoryDeletingKey, setAiMemoryDeletingKey] = useState('')
+  const [aiMemoryClearing, setAiMemoryClearing] = useState(false)
+  const [aiHistoryPreview, setAiHistoryPreview] = useState([])
+  const [aiHistoryPreviewLoading, setAiHistoryPreviewLoading] = useState(false)
+  const [aiHistoryClearing, setAiHistoryClearing] = useState(false)
   const [loginOpen, setLoginOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
@@ -179,13 +204,9 @@ function App() {
   const [aiChatOpen, setAiChatOpen] = useState(false)
   const [aiChatInput, setAiChatInput] = useState('')
   const [aiChatLoading, setAiChatLoading] = useState(false)
-  const [aiChatMessages, setAiChatMessages] = useState([
-    {
-      role: 'assistant',
-      content: '你好，我是 Spot AI 助手。可以帮你找店、比较评价、查询人均和优惠。',
-      generatedAt: new Date().toISOString()
-    }
-  ])
+  const [aiChatMessages, setAiChatMessages] = useState(initialAiMessages)
+  const [aiHistoryLoadedFor, setAiHistoryLoadedFor] = useState('')
+  const [aiHistoryLoading, setAiHistoryLoading] = useState(false)
   const activeDetailIdRef = useRef('')
 
   useEffect(() => {
@@ -206,6 +227,13 @@ function App() {
     const timer = window.setTimeout(() => setToast(''), 1800)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (!aiChatOpen) return
+    const historyKey = user?.id ? `user:${user.id}` : 'guest'
+    if (aiHistoryLoadedFor === historyKey) return
+    loadAiChatHistory(historyKey)
+  }, [aiChatOpen, user?.id])
 
   async function hydrateBackendData() {
     setIsLoading(true)
@@ -246,12 +274,56 @@ function App() {
   async function loadProfile() {
     if (!localStorage.getItem(tokenKey)) return
     setProfileLoading(true)
+    loadAiMemories()
+    loadAiHistoryPreview()
     const body = await api('/user/profile')
     setProfileLoading(false)
     if (body.success) {
       setProfileData(body.data)
     } else if (body.errorMsg) {
       setToast(body.errorMsg)
+    }
+  }
+
+  async function loadAiMemories() {
+    if (!localStorage.getItem(tokenKey)) {
+      setAiMemories([])
+      return
+    }
+    setAiMemoryLoading(true)
+    const body = await api('/ai/memories')
+    setAiMemoryLoading(false)
+    if (body.success && Array.isArray(body.data)) {
+      setAiMemories(body.data)
+    } else if (body.errorMsg && body.errorMsg !== '请先登录') {
+      setToast(body.errorMsg)
+    }
+  }
+
+  async function loadAiHistoryPreview() {
+    if (!localStorage.getItem(tokenKey)) {
+      setAiHistoryPreview([])
+      return
+    }
+    setAiHistoryPreviewLoading(true)
+    try {
+      const body = await api('/ai/conversations/recent?limit=6')
+      if (body.success && Array.isArray(body.data)) {
+        setAiHistoryPreview(body.data
+          .filter((item) => item && item.content)
+          .map((item, index) => ({
+            role: item.role === 'assistant' ? 'assistant' : 'user',
+            content: item.content || '',
+            generatedAt: item.generatedAt || `preview-${index}`
+          })))
+      } else if (body.errorMsg && body.errorMsg !== '请先登录') {
+        setToast(body.errorMsg)
+      }
+    } catch {
+      setAiHistoryPreview([])
+      setToast('AI 对话历史加载失败')
+    } finally {
+      setAiHistoryPreviewLoading(false)
     }
   }
 
@@ -297,6 +369,10 @@ function App() {
     localStorage.removeItem(tokenKey)
     setUser(null)
     setProfileData(null)
+    setAiMemories([])
+    setAiHistoryPreview([])
+    setAiHistoryLoadedFor('')
+    setAiChatMessages(initialAiMessages())
     setToast('已退出登录')
   }
 
@@ -781,6 +857,44 @@ function App() {
     }
   }
 
+  async function deleteAiMemory(memoryKey) {
+    if (!memoryKey) return
+    if (!window.confirm('确定删除这条 AI 偏好吗？删除后 AI 将不再主动参考它。')) return
+    const previous = aiMemories
+    setAiMemoryDeletingKey(memoryKey)
+    setAiMemories((items) => items.filter((item) => item.memoryKey !== memoryKey))
+    const body = await api(`/ai/memories/${encodeURIComponent(memoryKey)}`, { method: 'DELETE' })
+    setAiMemoryDeletingKey('')
+    if (body.success) {
+      setToast('AI 偏好已删除')
+    } else {
+      setAiMemories(previous)
+      setToast(body.errorMsg || '删除 AI 偏好失败')
+    }
+  }
+
+  async function clearAiMemories() {
+    if (!aiMemories.length || aiMemoryClearing) return
+    if (!window.confirm('确定清除全部 AI 记忆吗？清除后，AI 将不再参考已记录的偏好和历史摘要进行推荐。')) return
+    const previous = aiMemories
+    setAiMemoryClearing(true)
+    setAiMemories([])
+    try {
+      const body = await api('/ai/memories', { method: 'DELETE' })
+      if (body.success) {
+        setToast('AI 记忆已清除')
+      } else {
+        setAiMemories(previous)
+        setToast(body.errorMsg || '清除 AI 记忆失败')
+      }
+    } catch {
+      setAiMemories(previous)
+      setToast('清除 AI 记忆失败')
+    } finally {
+      setAiMemoryClearing(false)
+    }
+  }
+
   function changeFilter(nextFilter) {
     setActiveFilter(nextFilter)
     setIsFiltering(true)
@@ -800,39 +914,296 @@ function App() {
     window.setTimeout(() => setIsFiltering(false), 320)
   }
 
+  async function loadAiChatHistory(historyKey) {
+    setAiHistoryLoading(true)
+    try {
+      if (user?.id) {
+        const body = await api('/ai/conversations/recent?limit=20')
+        if (body.success && Array.isArray(body.data) && body.data.length > 0) {
+          setAiChatMessages([
+            ...initialAiMessages(),
+            ...body.data.map((item, index) => normalizeAiHistoryMessage(item, `history-${index}`))
+              .filter((item) => item.content)
+          ])
+        } else {
+          setAiChatMessages(initialAiMessages())
+          if (body.errorMsg && body.errorMsg !== '请先登录') setToast(body.errorMsg)
+        }
+        setAiHistoryLoadedFor(historyKey)
+        return
+      }
+
+      const stored = JSON.parse(localStorage.getItem(aiGuestHistoryKey) || '[]')
+      if (Array.isArray(stored) && stored.length > 0) {
+        setAiChatMessages([
+          ...initialAiMessages(),
+          ...stored.slice(-20)
+            .filter((item) => item && item.content)
+            .map((item, index) => normalizeAiHistoryMessage(item, `guest-history-${index}`))
+        ])
+      } else {
+        setAiChatMessages(initialAiMessages())
+      }
+    } catch {
+      if (!user?.id) localStorage.removeItem(aiGuestHistoryKey)
+      setAiChatMessages(initialAiMessages())
+      setToast('AI 历史同步失败')
+    } finally {
+      setAiHistoryLoadedFor(historyKey)
+      setAiHistoryLoading(false)
+    }
+  }
+
+  async function clearAiChatHistory() {
+    if (aiHistoryClearing) return
+    if (!window.confirm('确定清空当前 AI 对话历史吗？')) return
+    setAiHistoryClearing(true)
+    try {
+      if (user?.id) {
+        const body = await api('/ai/conversations', { method: 'DELETE' })
+        if (!body.success) {
+          setToast(body.errorMsg || '清空 AI 对话失败')
+          return
+        }
+        setAiHistoryLoadedFor(`user:${user.id}`)
+        setAiHistoryPreview([])
+      } else {
+        localStorage.removeItem(aiGuestHistoryKey)
+        setAiHistoryLoadedFor('guest')
+      }
+      setAiChatMessages(initialAiMessages())
+      setToast('AI 对话历史已清空')
+    } catch {
+      setToast('清空 AI 对话失败')
+    } finally {
+      setAiHistoryClearing(false)
+    }
+  }
+
+  function persistGuestAiMessages(messages) {
+    if (user?.id) return
+    const compact = messages
+      .filter((item) => item && (item.role === 'user' || item.role === 'assistant') && item.content)
+      .filter((item) => item.content !== aiGreeting)
+      .slice(-20)
+      .map(({ role, content, generatedAt, usedTools }) => ({
+        role,
+        content,
+        generatedAt: generatedAt || new Date().toISOString(),
+        usedTools: Array.isArray(usedTools) ? usedTools : []
+      }))
+    localStorage.setItem(aiGuestHistoryKey, JSON.stringify(compact))
+  }
+
+  function normalizeAiHistoryMessage(item, fallbackGeneratedAt) {
+    const role = item?.role === 'assistant' ? 'assistant' : 'user'
+    const content = item?.content || ''
+    const explicitTools = Array.isArray(item?.usedTools) ? item.usedTools : []
+    const confirmRequest = role === 'assistant' ? extractToolConfirmation(content, explicitTools) : null
+    return {
+      id: createMessageId(),
+      role,
+      content,
+      generatedAt: item?.generatedAt || fallbackGeneratedAt || new Date().toISOString(),
+      usedTools: role === 'assistant'
+        ? mergeToolNames(explicitTools, inferUsedToolsFromContent(content), confirmRequest?.toolName ? [confirmRequest.toolName] : [])
+        : [],
+      confirmRequest
+    }
+  }
+
+  function inferUsedToolsFromContent(content) {
+    if (!content || !/spotai:\/\/shop\/\d+/.test(content)) return []
+    return ['recommendShops']
+  }
+
+  function mergeToolNames(...groups) {
+    return [...new Set(groups.flat().filter(Boolean))]
+  }
+
+  function extractToolConfirmation(content, usedTools = []) {
+    const text = String(content || '')
+    if (!text.includes('CONFIRM_REQUIRED')) return null
+    const parsed = parseFirstJsonObject(text)
+    const confirmToken = parsed?.confirmToken || findJsonStringField(text, 'confirmToken')
+    if (!confirmToken) return null
+    const toolName = parsed?.toolName || findJsonStringField(text, 'toolName') || usedTools.find((item) => item === 'claimCoupon') || 'unknown'
+    return {
+      toolName,
+      confirmToken,
+      status: 'pending',
+      resultText: ''
+    }
+  }
+
+  function normalizeToolConfirmation(raw) {
+    if (!raw?.confirmToken) return null
+    return {
+      toolName: raw.toolName || 'unknown',
+      confirmToken: raw.confirmToken,
+      title: raw.title || '',
+      description: raw.description || '',
+      status: 'pending',
+      resultText: ''
+    }
+  }
+
+  function parseFirstJsonObject(text) {
+    const raw = String(text || '').replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+    const start = raw.indexOf('{')
+    const end = raw.lastIndexOf('}')
+    if (start < 0 || end <= start) return null
+    try {
+      return JSON.parse(raw.slice(start, end + 1))
+    } catch {
+      return null
+    }
+  }
+
+  function findJsonStringField(text, field) {
+    const match = String(text || '').match(new RegExp(`"${field}"\\s*:\\s*"([^"]+)"`))
+    return match?.[1] || ''
+  }
+
+  function isRawConfirmPayload(content) {
+    const text = String(content || '').trim()
+    if (!text.includes('CONFIRM_REQUIRED')) return false
+    const parsed = parseFirstJsonObject(text)
+    if (!parsed || parsed.status !== 'CONFIRM_REQUIRED') return false
+    return text.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim().startsWith('{')
+  }
+
   async function sendAiChatMessage(event, overrideMessage) {
     event?.preventDefault()
     const message = (overrideMessage || aiChatInput).trim()
     if (!message || aiChatLoading) return
-    const userMessage = { role: 'user', content: message, generatedAt: new Date().toISOString() }
-    setAiChatMessages((items) => [...items, userMessage])
+    const userMessage = { id: createMessageId(), role: 'user', content: message, generatedAt: new Date().toISOString() }
+    setAiChatMessages((items) => {
+      const next = [...items, userMessage]
+      persistGuestAiMessages(next)
+      return next
+    })
     setAiChatInput('')
     setAiChatOpen(true)
     setAiChatLoading(true)
     const history = aiChatMessages.slice(-8).map(({ role, content }) => ({ role, content }))
-    const body = await api('/ai/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        route: 'CHAT',
-        shopId: selectedBusiness?.id || null,
-        message,
-        history
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), aiChatTimeoutMs)
+    let body
+    try {
+      body = await api('/ai/chat', {
+        method: 'POST',
+        signal: controller.signal,
+        body: JSON.stringify({
+          route: 'CHAT',
+          shopId: selectedBusiness?.id || null,
+          message,
+          history
+        })
       })
-    })
-    setAiChatLoading(false)
-    setAiChatMessages((items) => [
-      ...items,
-      {
+    } catch (error) {
+      body = {
+        success: false,
+        errorMsg: error?.name === 'AbortError'
+          ? 'AI 响应超时，请稍后再试，或把问题说得更具体一点。'
+          : 'AI 请求失败，请检查后端服务是否正常。'
+      }
+    } finally {
+      window.clearTimeout(timer)
+      setAiChatLoading(false)
+    }
+    const answer = body.success && body.data?.answer
+      ? body.data.answer
+      : body.errorMsg || 'AI 助手暂不可用，请稍后再试。'
+    const explicitTools = Array.isArray(body.data?.usedTools) ? body.data.usedTools : []
+    const confirmRequest = normalizeToolConfirmation(body.data?.toolConfirmation)
+      || extractToolConfirmation(answer, explicitTools)
+    const assistantMessage = {
+        id: createMessageId(),
         role: 'assistant',
-        content: body.success && body.data?.answer
-          ? body.data.answer
-          : body.errorMsg || 'AI 助手暂不可用，请稍后再试。',
+        content: answer,
         generatedAt: body.data?.generatedAt || new Date().toISOString(),
         agentRoute: body.data?.agentRoute,
         memoryUpdated: Boolean(body.data?.memoryUpdated),
+        usedTools: mergeToolNames(explicitTools, confirmRequest?.toolName ? [confirmRequest.toolName] : []),
+        confirmRequest,
         error: !body.success
       }
-    ])
+    setAiChatMessages((items) => {
+      const next = [...items, assistantMessage]
+      persistGuestAiMessages(next)
+      return next
+    })
+    if (body.success && body.data?.memoryUpdated && user?.id) {
+      loadAiMemories()
+    }
+    if (body.success && user?.id) {
+      loadAiHistoryPreview()
+    }
+  }
+
+  async function confirmAiTool(messageId, confirmed) {
+    const target = aiChatMessages.find((message) => message.id === messageId)
+    const confirmRequest = target?.confirmRequest
+    if (!confirmRequest?.confirmToken || confirmRequest.status === 'processing') return
+    if (!user?.id && !localStorage.getItem(tokenKey)) {
+      setLoginOpen(true)
+      setToast('登录后才能确认 AI 代操作')
+      return
+    }
+    setAiChatMessages((items) => items.map((message) => message.id === messageId
+      ? {
+        ...message,
+        confirmRequest: {
+          ...message.confirmRequest,
+          status: 'processing',
+          resultText: confirmed ? '正在提交确认...' : '正在取消...'
+        }
+      }
+      : message))
+    const body = await api('/ai/tool/confirm', {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmToken: confirmRequest.confirmToken,
+        confirmed
+      })
+    })
+    const result = formatToolConfirmResult(body)
+    setAiChatMessages((items) => {
+      const next = items.map((message) => message.id === messageId
+        ? {
+          ...message,
+          confirmRequest: {
+            ...message.confirmRequest,
+            status: result.status,
+            resultText: result.text
+          }
+        }
+        : message)
+      persistGuestAiMessages(next)
+      return next
+    })
+    setToast(result.text)
+    if (result.status === 'confirmed') {
+      loadProfile()
+    }
+  }
+
+  function formatToolConfirmResult(body) {
+    if (!body?.success) {
+      return { status: 'error', text: body?.errorMsg || '确认失败，请稍后再试' }
+    }
+    const payload = typeof body.data === 'string' ? parseFirstJsonObject(body.data) : body.data
+    if (payload?.status === 'SUCCESS') {
+      return { status: 'confirmed', text: payload.orderId ? `领取成功，订单 ${payload.orderId}` : '操作成功' }
+    }
+    if (payload?.status === 'REJECTED') {
+      return { status: 'rejected', text: '已取消本次操作' }
+    }
+    if (payload?.message) {
+      return { status: 'error', text: repairText(payload.message) }
+    }
+    return { status: 'error', text: '确认失败，请稍后再试' }
   }
 
   const dataSource = usingServerData ? serverBusinesses : mockBusinesses
@@ -939,6 +1310,13 @@ function App() {
             user={user}
             data={profileData}
             loading={profileLoading}
+            aiMemories={aiMemories}
+            aiMemoryLoading={aiMemoryLoading}
+            aiMemoryDeletingKey={aiMemoryDeletingKey}
+            aiMemoryClearing={aiMemoryClearing}
+            aiHistoryPreview={aiHistoryPreview}
+            aiHistoryPreviewLoading={aiHistoryPreviewLoading}
+            aiHistoryClearing={aiHistoryClearing}
             onLogin={() => setLoginOpen(true)}
             onRefresh={loadProfile}
             onSign={signToday}
@@ -946,6 +1324,9 @@ function App() {
             onOpenBlog={openBlogDetail}
             onDeleteBlog={deleteBlog}
             onDeleteReview={deleteReview}
+            onDeleteAiMemory={deleteAiMemory}
+            onClearAiMemories={clearAiMemories}
+            onClearAiHistory={clearAiChatHistory}
           />
         )}
       </main>
@@ -996,9 +1377,12 @@ function App() {
         input={aiChatInput}
         setInput={setAiChatInput}
         loading={aiChatLoading}
+        historyLoading={aiHistoryLoading}
         selectedBusiness={selectedBusiness}
         onOpenBusiness={openBusinessDetail}
         onSubmit={sendAiChatMessage}
+        onConfirmTool={confirmAiTool}
+        onClearHistory={clearAiChatHistory}
       />
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
@@ -1015,12 +1399,7 @@ function Header({ city, setCity, query, setQuery, onSearch, activeView, setActiv
           <small>发现附近好店</small>
         </span>
       </button>
-      <label className="city-picker">
-        <span>城市</span>
-        <select value={city} onChange={(event) => setCity(event.target.value)} aria-label="选择城市">
-          {cityOptions.map((item) => <option key={item}>{item}</option>)}
-        </select>
-      </label>
+      <span className="city-picker-static"><MapPinned size={18} /> 西安</span>
       <form className="search-bar" onSubmit={onSearch}>
         <input
           type="search"
@@ -1043,7 +1422,7 @@ function Header({ city, setCity, query, setQuery, onSearch, activeView, setActiv
           </button>
         ))}
         {user
-          ? <button type="button" className="user-entry" onClick={onLogout}>{user.nickName || '退出'}</button>
+          ? <button type="button" className="user-entry" onClick={onLogout}>退出</button>
           : <button type="button" className="user-entry" onClick={onLogin}>登录</button>}
       </nav>
     </header>
@@ -1769,7 +2148,28 @@ function VoucherSection({ title, items, busyId, onClaim, onOpenShop }) {
   )
 }
 
-function ProfilePage({ user, data, loading, onLogin, onRefresh, onSign, onLogout, onOpenBlog, onDeleteBlog, onDeleteReview }) {
+function ProfilePage({
+  user,
+  data,
+  loading,
+  aiMemories,
+  aiMemoryLoading,
+  aiMemoryDeletingKey,
+  aiMemoryClearing,
+  aiHistoryPreview,
+  aiHistoryPreviewLoading,
+  aiHistoryClearing,
+  onLogin,
+  onRefresh,
+  onSign,
+  onLogout,
+  onOpenBlog,
+  onDeleteBlog,
+  onDeleteReview,
+  onDeleteAiMemory,
+  onClearAiMemories,
+  onClearAiHistory
+}) {
   if (!user) {
     return (
       <section className="page-panel profile-empty">
@@ -1784,6 +2184,8 @@ function ProfilePage({ user, data, loading, onLogin, onRefresh, onSign, onLogout
   const liked = data?.likedBlogs || []
   const vouchers = data?.vouchers || []
   const reviews = data?.reviews || []
+  const aiMemoryGroups = groupAiMemories(aiMemories || [])
+  const hasAiMemories = aiMemoryGroups.preferences.length > 0 || aiMemoryGroups.summaries.length > 0
   return (
     <section className="page-panel">
       <div className="profile-banner">
@@ -1815,11 +2217,87 @@ function ProfilePage({ user, data, loading, onLogin, onRefresh, onSign, onLogout
   )
 }
 
-function ProfileSection({ title, empty, children }) {
+function AiHistoryPreviewCard({ message }) {
+  const label = message.role === 'assistant' ? 'AI' : '你'
+  const content = repairText(richTextToPlainText(message.content || '')).slice(0, 120)
+  return (
+    <article className={`ai-history-card ${message.role === 'assistant' ? 'assistant' : 'user'}`}>
+      <span>{label}</span>
+      <p>{content || '空消息'}</p>
+    </article>
+  )
+}
+
+function AiMemoryCard({ memory, variant = 'preference', deleting, onDelete }) {
+  const summary = formatAiMemorySummary(memory.summary)
+  const source = formatAiMemorySource(memory)
+  const updatedAt = formatAiMemoryTime(memory.updateTime)
+  const deleteText = isConversationSummaryMemory(memory) ? '忽略此摘要' : '忽略此偏好'
+  return (
+    <article className={`ai-memory-card ${variant}`}>
+      <div>
+        <span>{formatAiMemoryType(memory)}</span>
+        <strong>{formatAiMemoryKey(memory.memoryKey)}</strong>
+      </div>
+      <p>{summary}</p>
+      <small className="ai-memory-meta">{source}{updatedAt ? ` · ${updatedAt}` : ''}</small>
+      <footer>
+        <small>置信度 {typeof memory.confidence === 'number' ? `${Math.round(memory.confidence * 100)}%` : '-'}</small>
+        <button type="button" className="danger-action" onClick={onDelete} disabled={deleting}>
+          {deleting ? '处理中' : deleteText}
+        </button>
+      </footer>
+    </article>
+  )
+}
+
+function groupAiMemories(memories) {
+  return memories.reduce((groups, memory) => {
+    if (isConversationSummaryMemory(memory)) {
+      groups.summaries.push(memory)
+    } else {
+      groups.preferences.push(memory)
+    }
+    return groups
+  }, { preferences: [], summaries: [] })
+}
+
+function isConversationSummaryMemory(memory) {
+  const key = String(memory?.memoryKey || '')
+  const type = String(memory?.memoryType || '')
+  return key.startsWith('conversation.summary') || type === 'conversation.summary'
+}
+
+function formatAiMemoryType(memory) {
+  if (isConversationSummaryMemory(memory)) return '对话摘要'
+  if (String(memory?.memoryType || '').includes('dining')) return '推荐偏好'
+  return memory?.memoryType || '偏好'
+}
+
+function formatAiMemorySource(memory) {
+  const agent = String(memory?.sourceAgent || '')
+  if (agent === 'ConversationSummaryAgent') return '来自历史对话摘要'
+  if (agent === 'PreferenceExtractorAgent') return '来自你的聊天偏好'
+  if (agent) return `来自 ${agent}`
+  if (isConversationSummaryMemory(memory)) return '来自历史对话'
+  return '来自 AI 记忆'
+}
+
+function formatAiMemoryTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function ProfileSection({ title, empty, action, children }) {
   const items = React.Children.toArray(children).filter(Boolean)
   return (
     <section className="profile-section">
-      <h2>{title}</h2>
+      <div className="profile-section-header">
+        <h2>{title}</h2>
+        {action}
+      </div>
       {items.length > 0 ? <div className="profile-grid">{items}</div> : <p className="muted-line">{empty}</p>}
     </section>
   )
@@ -1833,6 +2311,72 @@ function UserVoucher({ voucher }) {
       <small>{voucher.shopName || `商户 ${voucher.shopId || '-'}`}</small>
     </article>
   )
+}
+
+function formatAiMemoryKey(key) {
+  if (!key) return '偏好'
+  if (String(key).startsWith('conversation.summary')) return '历史对话摘要'
+  return String(key)
+    .replace(/^dining\.preference\./, '')
+    .replace(/^spot\.preference\./, '')
+    .replace(/[_\.]+/g, ' ')
+    .trim()
+}
+
+function formatAiMemorySummary(summary) {
+  if (!summary) return 'AI 已记录这条偏好。'
+  const text = String(summary).trim()
+  try {
+    const value = JSON.parse(text)
+    if (Array.isArray(value)) {
+      return value.map(formatAiMemoryValue).filter(Boolean).join('、') || text
+    }
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value)
+        .filter(([key]) => !isHiddenAiMemoryField(key))
+        .map(([key, item]) => `${formatAiMemoryFieldLabel(key)}：${formatAiMemoryValue(item)}`)
+        .filter((item) => !item.endsWith('：'))
+      return entries.join('；') || text
+    }
+  } catch {
+    return text
+  }
+  return text
+}
+
+function isHiddenAiMemoryField(key) {
+  return ['source', 'memorySource', 'agentRoute', 'confidence'].includes(key)
+}
+
+function formatAiMemoryFieldLabel(key) {
+  const labels = {
+    summary: '摘要',
+    budget: '预算',
+    taste: '口味/品类',
+    area: '常去区域',
+    scene: '使用场景',
+    avoid: '避雷点',
+    discount: '优惠偏好',
+    keyword: '关键词',
+    likes: '喜欢',
+    dislikes: '不喜欢',
+    min: '最低',
+    max: '最高'
+  }
+  return labels[key] || formatAiMemoryKey(key)
+}
+
+function formatAiMemoryValue(value) {
+  if (value === null || value === undefined) return ''
+  if (Array.isArray(value)) return value.map(formatAiMemoryValue).filter(Boolean).join('、')
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([key]) => !isHiddenAiMemoryField(key))
+      .map(([key, item]) => `${formatAiMemoryFieldLabel(key)} ${formatAiMemoryValue(item)}`)
+      .filter(Boolean)
+      .join('，')
+  }
+  return String(value)
 }
 
 function DetailSection({ title, children }) {
@@ -1868,7 +2412,7 @@ function LoginDialog({ open, email, code, countdown, busy, setEmail, setCode, on
   )
 }
 
-function AiChatWidget({ open, onToggle, messages, input, setInput, loading, selectedBusiness, onOpenBusiness, onSubmit }) {
+function AiChatWidget({ open, onToggle, messages, input, setInput, loading, historyLoading, selectedBusiness, onOpenBusiness, onSubmit, onConfirmTool, onClearHistory }) {
   const messageListRef = useRef(null)
   useEffect(() => {
     if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight
@@ -1879,18 +2423,41 @@ function AiChatWidget({ open, onToggle, messages, input, setInput, loading, sele
         <section className="ai-chat-panel">
           <header className="ai-chat-header">
             <div><p className="eyebrow">Spot AI</p><h2>本地生活助手</h2></div>
-            <button type="button" className="ai-icon-button" onClick={onToggle} aria-label="关闭 AI 助手">×</button>
+            <div className="ai-header-actions">
+              <button type="button" className="ai-text-button" onClick={onClearHistory} disabled={loading}>清空</button>
+              <button type="button" className="ai-icon-button" onClick={onToggle} aria-label="关闭 AI 助手">×</button>
+            </div>
           </header>
-          <div className="ai-chat-context">当前店铺：{selectedBusiness?.name || '无'}</div>
+          {selectedBusiness?.name && <div className="ai-chat-context">当前店铺：{selectedBusiness.name}</div>}
+          {historyLoading && <div className="ai-chat-sync" role="status">正在同步历史对话...</div>}
           <div className="ai-chat-messages" ref={messageListRef}>
             {messages.map((message, index) => (
-              <article key={`${message.role}-${index}-${message.generatedAt}`} className={`ai-message ${message.role === 'user' ? 'user' : 'assistant'} ${message.error ? 'error' : ''}`}>
+              <article key={message.id || `${message.role}-${index}-${message.generatedAt}`} className={`ai-message ${message.role === 'user' ? 'user' : 'assistant'} ${message.error ? 'error' : ''}`}>
                 <span>{message.role === 'user' ? '你' : 'AI'}</span>
-                {message.role === 'user' ? <p>{message.content}</p> : <AiMarkdown content={message.content} onOpenBusiness={onOpenBusiness} />}
+                {message.role === 'user'
+                  ? <p>{message.content}</p>
+                  : (
+                    <div className="ai-assistant-bubble">
+                      <AiMarkdown
+                        content={message.confirmRequest && isRawConfirmPayloadForDisplay(message.content)
+                          ? toolConfirmIntro(message.confirmRequest.toolName)
+                          : message.content}
+                        onOpenBusiness={onOpenBusiness}
+                      />
+                      {message.confirmRequest && (
+                        <AiToolConfirmCard
+                          request={message.confirmRequest}
+                          onConfirm={() => onConfirmTool?.(message.id, true)}
+                          onReject={() => onConfirmTool?.(message.id, false)}
+                        />
+                      )}
+                    </div>
+                  )}
+                {message.role !== 'user' && message.usedTools?.includes('recommendShops') && <small className="tool-pill">已查询推荐候选</small>}
                 {message.memoryUpdated && <small className="memory-pill">已更新偏好</small>}
               </article>
             ))}
-            {loading && <article className="ai-message assistant"><span>AI</span><div className="ai-markdown"><p>正在查询商家和评价数据...</p></div></article>}
+            {loading && <article className="ai-message assistant"><span>AI</span><div className="ai-assistant-bubble"><div className="ai-markdown"><p>正在查询商家和评价数据...</p></div></div></article>}
           </div>
           <form className="ai-chat-form" onSubmit={onSubmit}>
             <textarea
@@ -1914,6 +2481,62 @@ function AiChatWidget({ open, onToggle, messages, input, setInput, loading, sele
   )
 }
 
+function AiToolConfirmCard({ request, onConfirm, onReject }) {
+  const status = request?.status || 'pending'
+  const processing = status === 'processing'
+  const settled = ['confirmed', 'rejected', 'error'].includes(status)
+  const title = request?.title || toolConfirmTitle(request?.toolName)
+  const description = request?.description || toolConfirmDescription(request?.toolName)
+  const primaryLabel = request?.toolName === 'claimCoupon' ? '确定领取' : '确认'
+  const secondaryLabel = request?.toolName === 'claimCoupon' ? '暂不领取' : '取消'
+  return (
+    <section className={`ai-confirm-card ${status}`} role="group" aria-label={title}>
+      <div>
+        <span>{toolConfirmRiskLabel(request?.toolName)}</span>
+        <strong>{title}</strong>
+      </div>
+      <p>{settled && request?.resultText ? request.resultText : description}</p>
+      {!settled && (
+        <footer>
+          <button type="button" className="ai-confirm-secondary" onClick={onReject} disabled={processing}>
+            {processing ? '处理中' : secondaryLabel}
+          </button>
+          <button type="button" className="ai-confirm-primary" onClick={onConfirm} disabled={processing}>
+            {processing ? '领取中' : primaryLabel}
+          </button>
+        </footer>
+      )}
+    </section>
+  )
+}
+
+function isRawConfirmPayloadForDisplay(content) {
+  const text = String(content || '').trim()
+  if (!text.includes('CONFIRM_REQUIRED')) return false
+  const raw = text.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  return raw.startsWith('{') && raw.endsWith('}')
+}
+
+function toolConfirmIntro(toolName) {
+  if (toolName === 'claimCoupon') return 'AI 已为你找到可领取的优惠券，继续前需要你确认。'
+  return 'AI 准备执行一项需要确认的操作。'
+}
+
+function toolConfirmTitle(toolName) {
+  if (toolName === 'claimCoupon') return '确认领取优惠券'
+  return '确认 AI 操作'
+}
+
+function toolConfirmDescription(toolName) {
+  if (toolName === 'claimCoupon') return '确认后将调用后端为当前登录用户领取这张券，成功后会出现在“我的优惠券”中。'
+  return '确认后 AI 将继续执行该操作。'
+}
+
+function toolConfirmRiskLabel(toolName) {
+  if (toolName === 'claimCoupon') return '需要确认'
+  return '敏感操作'
+}
+
 function AiMarkdown({ content, onOpenBusiness }) {
   const html = useMemo(() => {
     if (!content) return ''
@@ -1928,7 +2551,7 @@ function AiMarkdown({ content, onOpenBusiness }) {
     const match = href.match(/^spotai:\/\/shop\/(\d+)$/)
     if (!match) return
     event.preventDefault()
-    onOpenBusiness?.(match[1])
+    onOpenBusiness?.(Number(match[1]))
   }
   return <div className="ai-markdown" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />
 }

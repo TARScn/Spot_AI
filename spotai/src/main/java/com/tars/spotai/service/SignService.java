@@ -4,10 +4,12 @@ import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.UserDTO;
 import com.tars.spotai.utils.RedisConstants;
 import com.tars.spotai.utils.UserHolder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -17,9 +19,16 @@ public class SignService {
     private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("yyyyMM");
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final Clock clock;
 
+    @Autowired
     public SignService(StringRedisTemplate stringRedisTemplate) {
+        this(stringRedisTemplate, Clock.systemDefaultZone());
+    }
+
+    SignService(StringRedisTemplate stringRedisTemplate, Clock clock) {
         this.stringRedisTemplate = stringRedisTemplate;
+        this.clock = clock;
     }
 
     public Result<Void> sign() {
@@ -27,7 +36,7 @@ public class SignService {
         if (user == null || user.getId() == null) {
             return Result.fail("请先登录");
         }
-        LocalDate now = LocalDate.now();
+        LocalDate now = LocalDate.now(clock);
         String key = signKey(user.getId(), now);
         int offset = now.getDayOfMonth() - 1;
         Boolean alreadySigned = stringRedisTemplate.opsForValue().setBit(key, offset, true);
@@ -42,7 +51,7 @@ public class SignService {
         if (user == null || user.getId() == null) {
             return Result.fail("请先登录");
         }
-        LocalDate now = LocalDate.now();
+        LocalDate now = LocalDate.now(clock);
         int dayOfMonth = now.getDayOfMonth();
         List<Long> result = stringRedisTemplate.opsForValue().bitField(
                 signKey(user.getId(), now),

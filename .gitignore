@@ -65,3 +65,7 @@ web/.npmrc
 # scripts
 scripts/
 
+.agents
+.codex-logs
+
+queryex

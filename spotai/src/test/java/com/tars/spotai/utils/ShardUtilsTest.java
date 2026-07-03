@@ -22,5 +22,6 @@ class ShardUtilsTest {
 
         assertThat(ShardUtils.aiConversationTable(userId)).isEqualTo("tb_ai_conversation_" + shard);
         assertThat(ShardUtils.aiUserMemoryTable(userId)).isEqualTo("tb_ai_user_memory_" + shard);
+        assertThat(ShardUtils.aiToolCallLogTable(userId)).isEqualTo("tb_ai_tool_call_log_" + shard);
     }
 }

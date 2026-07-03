@@ -53,4 +53,8 @@ public final class ShardUtils {
     public static String aiUserMemoryTable(Long userId) {
         return "tb_ai_user_memory_" + idShard(userId);
     }
+
+    public static String aiToolCallLogTable(Long userId) {
+        return "tb_ai_tool_call_log_" + idShard(userId);
+    }
 }
