@@ -1,6 +1,8 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
 import com.tars.spotai.config.VoucherProperties;
+import com.tars.spotai.dto.NormalVoucherOrderMessage;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.UserDTO;
 import com.tars.spotai.dto.VoucherOrderMessage;
@@ -52,6 +54,8 @@ class VoucherServiceTest {
     @Mock
     private RocketMQTemplate rocketMQTemplate;
     @Mock
+    private MqEventPublisher mqEventPublisher;
+    @Mock
     private RedissonClient redissonClient;
     @Mock
     private RLock lock;
@@ -61,11 +65,13 @@ class VoucherServiceTest {
     private TransactionStatus transactionStatus;
 
     private VoucherService voucherService;
+    private MqEventProperties mqEventProperties;
 
     @BeforeEach
     void setUp() {
         VoucherProperties voucherProperties = new VoucherProperties();
         voucherProperties.setOrderTopic("spotai.voucher-order.create");
+        mqEventProperties = new MqEventProperties();
         voucherService = new VoucherService(
                 voucherRepository,
                 shopRepository,
@@ -73,6 +79,8 @@ class VoucherServiceTest {
                 stringRedisTemplate,
                 rocketMQTemplate,
                 voucherProperties,
+                mqEventPublisher,
+                mqEventProperties,
                 redissonClient,
                 transactionTemplate
         );
@@ -132,6 +140,8 @@ class VoucherServiceTest {
                 stringRedisTemplate,
                 rocketMQTemplate,
                 voucherProperties,
+                mqEventPublisher,
+                mqEventProperties,
                 redissonClient,
                 transactionTemplate
         );
@@ -179,11 +189,73 @@ class VoucherServiceTest {
         verify(stringRedisTemplate, never()).execute(any(DefaultRedisScript.class), anyList(), anyString());
     }
 
+    @Test
+    void claimVoucherPublishesNormalVoucherOrderMessage() {
+        UserHolder.saveUser(new UserDTO(1001L, "user_1001", ""));
+        when(voucherRepository.findVoucherById(3001L)).thenReturn(normalVoucherBase());
+        when(voucherRepository.existsOrder(1001L, 3001L)).thenReturn(false);
+        when(redisIdWorker.nextId("voucher_order")).thenReturn(9901L);
+
+        Result<Long> result = voucherService.claimVoucher(3001L);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getData()).isEqualTo(9901L);
+        verify(mqEventPublisher).publishOrRun(
+                eq("spotai.voucher-normal-order.create"),
+                any(NormalVoucherOrderMessage.class),
+                any(Runnable.class)
+        );
+        verify(voucherRepository, never()).insertVoucherOrder(anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void handleNormalVoucherOrderCreatesOrderWithoutDeductingStock() throws InterruptedException {
+        NormalVoucherOrderMessage message = new NormalVoucherOrderMessage(
+                9901L,
+                1001L,
+                3001L,
+                9901L,
+                LocalDateTime.now()
+        );
+        when(redissonClient.getLock("lock:order:1001:3001")).thenReturn(lock);
+        when(lock.tryLock(1, 10, TimeUnit.SECONDS)).thenReturn(true);
+        when(lock.isHeldByCurrentThread()).thenReturn(true);
+        when(voucherRepository.existsOrder(1001L, 3001L)).thenReturn(false);
+        when(redisIdWorker.nextId("voucher_order_router")).thenReturn(9911L);
+        invokeTransactionWithoutResult();
+
+        voucherService.handleNormalVoucherOrder(message);
+
+        verify(voucherRepository).insertVoucherOrder(9901L, 1001L, 3001L);
+        verify(voucherRepository).insertVoucherOrderRouter(9911L, 9901L, 1001L, 3001L);
+        verify(voucherRepository, never()).deductStock(3001L);
+        verify(lock).unlock();
+    }
+
+    @Test
+    void normalVoucherOrderConsumerDelegatesToVoucherService() {
+        VoucherService service = org.mockito.Mockito.mock(VoucherService.class);
+        NormalVoucherOrderConsumer consumer = new NormalVoucherOrderConsumer(service);
+        NormalVoucherOrderMessage message = new NormalVoucherOrderMessage(9901L, 1001L, 3001L, 9901L, LocalDateTime.now());
+
+        consumer.onMessage(message);
+
+        verify(service).handleNormalVoucherOrder(message);
+    }
+
     private void invokeTransactionCallback() {
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(transactionStatus);
         });
+    }
+
+    private void invokeTransactionWithoutResult() {
+        org.mockito.Mockito.doAnswer(invocation -> {
+            java.util.function.Consumer<TransactionStatus> callback = invocation.getArgument(0);
+            callback.accept(transactionStatus);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 
     private void mockSuccessfulDirectOrderCreation() throws InterruptedException {
@@ -202,6 +274,14 @@ class VoucherServiceTest {
         Voucher voucher = new Voucher();
         voucher.setId(2001L);
         voucher.setType(1);
+        voucher.setStatus(1);
+        return voucher;
+    }
+
+    private Voucher normalVoucherBase() {
+        Voucher voucher = new Voucher();
+        voucher.setId(3001L);
+        voucher.setType(0);
         voucher.setStatus(1);
         return voucher;
     }

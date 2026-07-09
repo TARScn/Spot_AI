@@ -1,8 +1,10 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.UserDTO;
 import com.tars.spotai.dto.UvRecordDTO;
+import com.tars.spotai.dto.UvRecordMessage;
 import com.tars.spotai.utils.UserHolder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,12 +30,14 @@ class UvStatsServiceTest {
     private StringRedisTemplate stringRedisTemplate;
     @Mock
     private HyperLogLogOperations<String, String> hyperLogLogOperations;
+    @Mock
+    private MqEventPublisher mqEventPublisher;
 
     private UvStatsService uvStatsService;
 
     @BeforeEach
     void setUp() {
-        uvStatsService = new UvStatsService(stringRedisTemplate);
+        uvStatsService = new UvStatsService(stringRedisTemplate, mqEventPublisher, new MqEventProperties());
     }
 
     @AfterEach
@@ -42,8 +46,7 @@ class UvStatsServiceTest {
     }
 
     @Test
-    void recordAddsSiteAndShopUvWithCurrentUser() {
-        when(stringRedisTemplate.opsForHyperLogLog()).thenReturn(hyperLogLogOperations);
+    void recordPublishesUvEventWithCurrentUser() {
         UserHolder.saveUser(new UserDTO(1001L, "alice", ""));
         UvRecordDTO dto = new UvRecordDTO();
         dto.setTargetType("shop");
@@ -52,8 +55,40 @@ class UvStatsServiceTest {
         Result<Void> result = uvStatsService.record(dto);
 
         assertThat(result.isSuccess()).isTrue();
+        verify(mqEventPublisher).publishOrRun(
+                eq("spotai.uv.record"),
+                any(UvRecordMessage.class),
+                any(Runnable.class)
+        );
+        verifyNoInteractions(stringRedisTemplate, hyperLogLogOperations);
+    }
+
+    @Test
+    void recordDirectAddsSiteAndShopUv() {
+        when(stringRedisTemplate.opsForHyperLogLog()).thenReturn(hyperLogLogOperations);
+        UvRecordMessage message = new UvRecordMessage(
+                "shop",
+                10L,
+                null,
+                "user:1001",
+                LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
+        );
+
+        uvStatsService.recordDirect(message);
+
         verify(hyperLogLogOperations).add(eq("uv:site:" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)), eq("user:1001"));
         verify(hyperLogLogOperations).add(eq("uv:shop:10:" + LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)), eq("user:1001"));
+    }
+
+    @Test
+    void uvRecordConsumerDelegatesToDirectRecord() {
+        UvStatsService service = org.mockito.Mockito.mock(UvStatsService.class);
+        UvRecordConsumer consumer = new UvRecordConsumer(service);
+        UvRecordMessage message = new UvRecordMessage("site", null, null, "visitor:1", "20260707");
+
+        consumer.onMessage(message);
+
+        verify(service).recordDirect(message);
     }
 
     @Test

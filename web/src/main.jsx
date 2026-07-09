@@ -8,30 +8,45 @@ import {
   Film,
   Flame,
   Gamepad2,
+  House,
   HeartPulse,
   Hotel,
   MapPinned,
   Mic,
+  NotebookTabs,
   Scissors,
   Sparkles,
   Store,
+  TicketPercent,
   Utensils,
+  UserRound,
   Wine
 } from 'lucide-react'
 import {
   businesses as mockBusinesses,
   categories as mockCategories,
   districts,
-  filters,
-  rankings
+  filters
 } from './mockLocalLifeData'
+import {
+  buildBusinessRankings,
+  normalizeShopId,
+  shopIdFromHref
+} from './shopNavigation'
+import { formatShopItemPrice, normalizeShopItems } from './shopItems'
 import './styles.css'
 
+// =============================
+// 全局配置与轻量工具
+// =============================
+// 这个文件当前承载了首页、详情页、探店笔记、优惠券、用户中心和 AI 助手。
+// 后续如果继续扩展，优先按下方大组件拆分到独立文件，而不是继续堆在 main.jsx。
 const tokenKey = 'spotai_token'
 const aiGuestHistoryKey = 'spotai_ai_guest_history'
 const userLocation = { x: '108.916860', y: '34.229210' }
 const aiGreeting = '你好，我是 Spot AI 助手。可以帮你找店、比较评价、查询人均和优惠。'
 const aiChatTimeoutMs = 45000
+const fallbackBusinesses = mockBusinesses.map((business) => ({ ...business, dataOrigin: 'mock' }))
 
 const categoryIconMap = {
   food: Utensils,
@@ -78,10 +93,10 @@ function categoryIconKey(name = '') {
 }
 
 const navItems = [
-  { id: 'home', label: '找店' },
-  { id: 'blogs', label: '探店笔记' },
-  { id: 'deals', label: '秒杀优惠' },
-  { id: 'profile', label: '我的' }
+  { id: 'home', label: '找店', mobileLabel: '找店', Icon: House },
+  { id: 'blogs', label: '探店笔记', mobileLabel: '笔记', Icon: NotebookTabs },
+  { id: 'deals', label: '秒杀优惠', mobileLabel: '优惠', Icon: TicketPercent },
+  { id: 'profile', label: '我的', mobileLabel: '我的', Icon: UserRound }
 ]
 
 const filterStrategies = {
@@ -141,6 +156,7 @@ async function api(path, options = {}) {
 }
 
 function App() {
+  // 首页找店与店铺详情状态
   const [activeView, setActiveView] = useState('home')
   const [city, setCity] = useState('西安')
   const [query, setQuery] = useState('')
@@ -152,6 +168,8 @@ function App() {
   const [activeDistrict, setActiveDistrict] = useState('全部')
   const [selectedBusiness, setSelectedBusiness] = useState(null)
   const [detailVouchers, setDetailVouchers] = useState([])
+  const [shopItems, setShopItems] = useState([])
+  const [shopItemsLoading, setShopItemsLoading] = useState(false)
   const [reviewSummary, setReviewSummary] = useState(null)
   const [reviewSummaryLoading, setReviewSummaryLoading] = useState(false)
   const [shopReviews, setShopReviews] = useState([])
@@ -164,6 +182,7 @@ function App() {
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
 
+  // 探店笔记：发现/关注流、发布器、店铺搜索与图片上传
   const [blogs, setBlogs] = useState([])
   const [blogLoading, setBlogLoading] = useState(false)
   const [blogMode, setBlogMode] = useState('discover')
@@ -178,10 +197,12 @@ function App() {
   const [blogShopSearching, setBlogShopSearching] = useState(false)
   const [followFeedCursor, setFollowFeedCursor] = useState({ minTime: 0, offset: 0, hasMore: false })
 
+  // 秒杀和代金券活动
   const [voucherActivities, setVoucherActivities] = useState([])
   const [voucherLoading, setVoucherLoading] = useState(false)
   const [voucherBusyId, setVoucherBusyId] = useState(null)
 
+  // 登录用户、个人页和 AI 记忆展示
   const [user, setUser] = useState(null)
   const [profileData, setProfileData] = useState(null)
   const [profileLoading, setProfileLoading] = useState(false)
@@ -201,6 +222,7 @@ function App() {
   const [reviewPublishing, setReviewPublishing] = useState(false)
   const [reviewImageUploading, setReviewImageUploading] = useState(false)
 
+  // AI 助手：游客历史只存在 localStorage，登录用户历史由后端保存。
   const [aiChatOpen, setAiChatOpen] = useState(false)
   const [aiChatInput, setAiChatInput] = useState('')
   const [aiChatLoading, setAiChatLoading] = useState(false)
@@ -235,6 +257,7 @@ function App() {
     loadAiChatHistory(historyKey)
   }, [aiChatOpen, user?.id])
 
+  /** 启动时优先拉后端真实分类和店铺；失败时退回 mock 数据，保证页面可浏览。 */
   async function hydrateBackendData() {
     setIsLoading(true)
     try {
@@ -408,36 +431,64 @@ function App() {
     setError(body.errorMsg || '商户搜索失败')
   }
 
+  /**
+   * 打开店铺详情。
+   *
+   * 评价列表与 AI 摘要分开加载：评价要先展示，AI 摘要可能较慢，不能阻塞详情页首屏。
+   */
   async function openBusinessDetail(businessOrId) {
-    const id = typeof businessOrId === 'object' ? businessOrId.id : Number(businessOrId)
+    const id = normalizeShopId(typeof businessOrId === 'object' ? businessOrId.id : businessOrId)
+    if (!id) return
     const summary = typeof businessOrId === 'object' ? businessOrId : null
-    activeDetailIdRef.current = String(id)
+    activeDetailIdRef.current = id
     if (summary) setSelectedBusiness(summary)
     setDetailLoading(true)
     setDetailVouchers([])
+    setShopItems([])
+    setShopItemsLoading(true)
     setReviewSummary(null)
     setReviewSummaryLoading(true)
     setShopReviews([])
     setReviewPage(1)
     setReviewHasMore(false)
     setReviewDraft(emptyReviewDraft)
+    if (summary?.dataOrigin === 'mock') {
+      setShopReviews((summary.reviewsList || []).map((content, index) => ({
+        id: `mock-review-${summary.id}-${index}`,
+        userName: '本地食客',
+        score: summary.rating || 5,
+        content,
+        liked: 0,
+        images: [],
+        createTime: ''
+      })))
+      setReviewSummaryLoading(false)
+      setShopItemsLoading(false)
+      setDetailLoading(false)
+      return
+    }
     try {
-      const [shopBody, voucherBody] = await Promise.all([
+      const [shopBody, voucherBody, itemBody] = await Promise.all([
         api(`/shop/${id}`),
         api(`/voucher/activities/of/shop?${new URLSearchParams({ shopId: String(id) })}`),
+        api(`/shop/${id}/items`),
         loadShopReviews(id, 1, true)
       ])
-      if (activeDetailIdRef.current !== String(id)) return
+      if (activeDetailIdRef.current !== id) return
       if (shopBody.success && shopBody.data) {
         const normalized = normalizeShop(shopBody.data)
         setSelectedBusiness({ ...normalized, distance: summary?.distance ?? normalized.distance })
       } else if (!summary) {
-        const fallback = mockBusinesses.find((item) => Number(item.id) === id)
+        const fallback = fallbackBusinesses.find((item) => String(item.id) === id)
         if (fallback) setSelectedBusiness(fallback)
       }
       if (voucherBody.success && Array.isArray(voucherBody.data)) setDetailVouchers(voucherBody.data)
+      if (itemBody.success) setShopItems(normalizeShopItems(itemBody.data))
     } finally {
-      if (activeDetailIdRef.current === String(id)) setDetailLoading(false)
+      if (activeDetailIdRef.current === id) {
+        setDetailLoading(false)
+        setShopItemsLoading(false)
+      }
     }
     loadReviewSummary(id)
   }
@@ -1073,6 +1124,11 @@ function App() {
     return text.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim().startsWith('{')
   }
 
+  /**
+   * 发送 AI 消息。
+   *
+   * 后端可能返回 toolConfirmation，前端会渲染确认卡片；游客对话只保留在本地。
+   */
   async function sendAiChatMessage(event, overrideMessage) {
     event?.preventDefault()
     const message = (overrideMessage || aiChatInput).trim()
@@ -1206,7 +1262,10 @@ function App() {
     return { status: 'error', text: '确认失败，请稍后再试' }
   }
 
-  const dataSource = usingServerData ? serverBusinesses : mockBusinesses
+  const dataSource = usingServerData ? serverBusinesses : fallbackBusinesses
+  const activeRankings = useMemo(() => buildBusinessRankings(
+    dataSource.length > 0 ? dataSource : fallbackBusinesses
+  ), [dataSource])
   const visibleBusinesses = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     const filtered = dataSource.filter((item) => {
@@ -1243,6 +1302,7 @@ function App() {
         onLogin={() => setLoginOpen(true)}
         onLogout={logout}
       />
+      <MobileBottomNav activeView={activeView} setActiveView={setActiveView} />
       <main className="page-enter">
         {activeView === 'home' && (
           <HomePage
@@ -1260,7 +1320,7 @@ function App() {
             activeDistrict={activeDistrict}
             setActiveDistrict={setActiveDistrict}
             onOpenBusiness={openBusinessDetail}
-            rankings={rankings}
+            rankings={activeRankings}
             dataSource={dataSource}
           />
         )}
@@ -1333,12 +1393,16 @@ function App() {
       <BusinessDetail
         business={selectedBusiness}
         vouchers={detailVouchers}
+        shopItems={shopItems}
+        shopItemsLoading={shopItemsLoading}
         reviewSummary={reviewSummary}
         loading={detailLoading}
         onClose={() => {
           activeDetailIdRef.current = ''
           setSelectedBusiness(null)
           setReviewSummaryLoading(false)
+          setShopItems([])
+          setShopItemsLoading(false)
         }}
         voucherBusyId={voucherBusyId}
         onClaimVoucher={claimVoucher}
@@ -1429,6 +1493,25 @@ function Header({ city, setCity, query, setQuery, onSearch, activeView, setActiv
   )
 }
 
+function MobileBottomNav({ activeView, setActiveView }) {
+  return (
+    <nav className="mobile-bottom-nav" aria-label="移动端主导航">
+      {navItems.map(({ id, mobileLabel, Icon }) => (
+        <button
+          type="button"
+          key={id}
+          className={activeView === id ? 'active' : ''}
+          onClick={() => setActiveView(id)}
+          aria-current={activeView === id ? 'page' : undefined}
+        >
+          <Icon size={20} strokeWidth={2.3} aria-hidden="true" />
+          <span>{mobileLabel}</span>
+        </button>
+      ))}
+    </nav>
+  )
+}
+
 function HomePage({
   setQuery,
   categoryOptions,
@@ -1483,8 +1566,8 @@ function HomePage({
           />
         </div>
         <aside className="side-column" aria-label="热门榜单">
-          <RankingSection rankings={rankings} onOpen={(name) => {
-            const target = [...dataSource, ...mockBusinesses].find((item) => item.name === name)
+          <RankingSection rankings={rankings} onOpen={(item) => {
+            const target = dataSource.find((business) => String(business.id) === item.shopId)
             if (target) onOpenBusiness(target)
           }} />
         </aside>
@@ -1660,7 +1743,7 @@ function RankingSection({ rankings, onOpen }) {
             <ol>
               {ranking.items.map((item) => (
                 <li key={`${ranking.id}-${item.name}`}>
-                  <button type="button" onClick={() => onOpen(item.name)}>
+                  <button type="button" onClick={() => onOpen(item)}>
                     <span className={item.rank === 1 ? 'rank top' : 'rank'}>{item.rank}</span>
                     <strong>{item.name}</strong>
                     <small>{item.score} 分 · {item.reason}</small>
@@ -1679,6 +1762,8 @@ function RankingSection({ rankings, onOpen }) {
 function BusinessDetail({
   business,
   vouchers,
+  shopItems,
+  shopItemsLoading,
   reviewSummary,
   loading,
   onClose,
@@ -1747,11 +1832,7 @@ function BusinessDetail({
               ))}
             </div>
           </DetailSection>
-          <DetailSection title="推荐菜 / 服务">
-            <div className="dish-row">
-              {business.dishes.map((dish) => <span key={dish}>{dish}</span>)}
-            </div>
-          </DetailSection>
+          <ShopItemSection items={shopItems} loading={shopItemsLoading} />
           <ReviewComposer
             user={user}
             draft={reviewDraft}
@@ -1939,8 +2020,8 @@ function BlogPage({
     images: imageCsvToList(current.images).filter((image) => image !== url).join(',')
   }))
   return (
-    <section className="page-panel">
-      <div className="section-title-row">
+    <section className="page-panel blog-page">
+      <div className="section-title-row blog-page-header">
         <div>
           <p className="eyebrow">探店笔记</p>
           <h1>{activeMode === 'follow' ? '关注博主的新笔记' : '真实用户正在分享的店'}</h1>
@@ -2388,6 +2469,33 @@ function DetailSection({ title, children }) {
   )
 }
 
+function ShopItemSection({ items, loading }) {
+  return (
+    <DetailSection title="推荐菜 / 服务">
+      {loading ? (
+        <div className="shop-item-grid" aria-busy="true" aria-label="正在加载推荐菜和服务">
+          <span className="shop-item-skeleton" />
+          <span className="shop-item-skeleton" />
+        </div>
+      ) : items?.length ? (
+        <div className="shop-item-grid">
+          {items.map((item) => (
+            <article className="shop-item-card" key={item.id}>
+              <div>
+                <strong>{repairText(item.name)}</strong>
+                <span>{formatShopItemPrice(item.price)}</span>
+              </div>
+              {item.description && <p>{repairText(item.description)}</p>}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="shop-item-empty">该店暂未维护推荐菜或服务。</p>
+      )}
+    </DetailSection>
+  )
+}
+
 function LoginDialog({ open, email, code, countdown, busy, setEmail, setCode, onSendCode, onLogin, onClose }) {
   if (!open) return null
   return (
@@ -2442,7 +2550,10 @@ function AiChatWidget({ open, onToggle, messages, input, setInput, loading, hist
                         content={message.confirmRequest && isRawConfirmPayloadForDisplay(message.content)
                           ? toolConfirmIntro(message.confirmRequest.toolName)
                           : message.content}
-                        onOpenBusiness={onOpenBusiness}
+                        onOpenBusiness={(shopId) => {
+                          onOpenBusiness?.(shopId)
+                          onToggle()
+                        }}
                       />
                       {message.confirmRequest && (
                         <AiToolConfirmCard
@@ -2548,10 +2659,10 @@ function AiMarkdown({ content, onOpenBusiness }) {
     const link = event.target.closest?.('a')
     if (!link) return
     const href = link.getAttribute('href') || ''
-    const match = href.match(/^spotai:\/\/shop\/(\d+)$/)
-    if (!match) return
+    const shopId = shopIdFromHref(href)
+    if (!shopId) return
     event.preventDefault()
-    onOpenBusiness?.(Number(match[1]))
+    onOpenBusiness?.(shopId)
   }
   return <div className="ai-markdown" onClick={handleClick} dangerouslySetInnerHTML={{ __html: html }} />
 }

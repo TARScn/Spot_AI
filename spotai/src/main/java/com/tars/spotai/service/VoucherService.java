@@ -1,6 +1,8 @@
 package com.tars.spotai.service;
 
 import com.tars.spotai.config.VoucherProperties;
+import com.tars.spotai.config.MqEventProperties;
+import com.tars.spotai.dto.NormalVoucherOrderMessage;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.SeckillVoucherDTO;
 import com.tars.spotai.dto.UserDTO;
@@ -64,6 +66,8 @@ public class VoucherService {
     private final StringRedisTemplate stringRedisTemplate;
     private final RocketMQTemplate rocketMQTemplate;
     private final VoucherProperties voucherProperties;
+    private final MqEventPublisher mqEventPublisher;
+    private final MqEventProperties mqEventProperties;
     private final RedissonClient redissonClient;
     private final TransactionTemplate transactionTemplate;
 
@@ -73,6 +77,8 @@ public class VoucherService {
                           StringRedisTemplate stringRedisTemplate,
                           RocketMQTemplate rocketMQTemplate,
                           VoucherProperties voucherProperties,
+                          MqEventPublisher mqEventPublisher,
+                          MqEventProperties mqEventProperties,
                           RedissonClient redissonClient,
                           TransactionTemplate transactionTemplate) {
         this.voucherRepository = voucherRepository;
@@ -81,6 +87,8 @@ public class VoucherService {
         this.stringRedisTemplate = stringRedisTemplate;
         this.rocketMQTemplate = rocketMQTemplate;
         this.voucherProperties = voucherProperties;
+        this.mqEventPublisher = mqEventPublisher;
+        this.mqEventProperties = mqEventProperties;
         this.redissonClient = redissonClient;
         this.transactionTemplate = transactionTemplate;
     }
@@ -161,16 +169,54 @@ public class VoucherService {
         }
 
         Long orderId = redisIdWorker.nextId("voucher_order");
-        transactionTemplate.executeWithoutResult(status -> {
-            voucherRepository.insertVoucherOrder(orderId, user.getId(), voucherId);
-            voucherRepository.insertVoucherOrderRouter(
-                    redisIdWorker.nextId("voucher_order_router"),
-                    orderId,
-                    user.getId(),
-                    voucherId
-            );
-        });
+        NormalVoucherOrderMessage message = new NormalVoucherOrderMessage(
+                orderId,
+                user.getId(),
+                voucherId,
+                orderId,
+                LocalDateTime.now()
+        );
+        mqEventPublisher.publishOrRun(
+                mqEventProperties.getNormalVoucherOrderTopic(),
+                message,
+                () -> handleNormalVoucherOrder(message)
+        );
         return Result.ok(orderId);
+    }
+
+    public void handleNormalVoucherOrder(NormalVoucherOrderMessage message) {
+        validateNormalVoucherMessage(message);
+        RLock lock = redissonClient.getLock(
+                RedisConstants.LOCK_VOUCHER_ORDER_KEY + message.getUserId() + ":" + message.getVoucherId()
+        );
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(1, 10, TimeUnit.SECONDS);
+            if (!locked) {
+                throw new VoucherOrderLockBusyException("Could not acquire normal voucher order lock");
+            }
+            transactionTemplate.executeWithoutResult(status -> createNormalVoucherOrder(message));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while acquiring voucher order lock", e);
+        } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private void createNormalVoucherOrder(NormalVoucherOrderMessage message) {
+        if (voucherRepository.existsOrder(message.getUserId(), message.getVoucherId())) {
+            return;
+        }
+        voucherRepository.insertVoucherOrder(message.getOrderId(), message.getUserId(), message.getVoucherId());
+        voucherRepository.insertVoucherOrderRouter(
+                redisIdWorker.nextId("voucher_order_router"),
+                message.getOrderId(),
+                message.getUserId(),
+                message.getVoucherId()
+        );
     }
 
     public Result<Long> seckillVoucher(Long voucherId) {
@@ -417,6 +463,15 @@ public class VoucherService {
                 || message.getUserId() == null
                 || message.getVoucherId() == null) {
             throw new IllegalArgumentException("Invalid voucher order message");
+        }
+    }
+
+    private void validateNormalVoucherMessage(NormalVoucherOrderMessage message) {
+        if (message == null
+                || message.getOrderId() == null
+                || message.getUserId() == null
+                || message.getVoucherId() == null) {
+            throw new IllegalArgumentException("Invalid normal voucher order message");
         }
     }
 

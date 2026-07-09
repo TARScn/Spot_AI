@@ -1,7 +1,9 @@
 package com.tars.spotai.controller;
 
 import com.tars.spotai.dto.Result;
+import com.tars.spotai.dto.ShopItemDTO;
 import com.tars.spotai.entity.Shop;
+import com.tars.spotai.service.ShopItemService;
 import com.tars.spotai.service.ShopService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,15 +21,22 @@ import java.util.List;
 public class ShopController {
     /* 1. 依赖注入 */
     private final ShopService shopService;
+    private final ShopItemService shopItemService;
 
-    public ShopController(ShopService shopService) {
+    public ShopController(ShopService shopService, ShopItemService shopItemService) {
         this.shopService = shopService;
+        this.shopItemService = shopItemService;
     }
 
     /* 2. 根据 ID 查询商户详情（缓存加速） */
     @GetMapping("/shop/{id}")
     public Result<Shop> queryShopById(@PathVariable Long id) {
         return shopService.queryById(id);
+    }
+
+    @GetMapping("/shop/{id}/items")
+    public Result<List<ShopItemDTO>> queryShopItems(@PathVariable Long id) {
+        return shopItemService.queryByShopId(id);
     }
 
     @GetMapping("/shop/of/type")

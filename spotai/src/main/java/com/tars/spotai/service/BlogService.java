@@ -1,6 +1,8 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
 import com.tars.spotai.dto.BlogCreateDTO;
+import com.tars.spotai.dto.BlogPublishedMessage;
 import com.tars.spotai.dto.BlogViewDTO;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.ScrollResultDTO;
@@ -24,9 +26,28 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * 探店笔记核心业务。
+ *
+ * <p>这里同时维护三类状态：MySQL 中的笔记主体、Redis 中的点赞关系、
+ * Redis 关注流中的笔记投递。控制器只负责协议转发，业务规则统一收敛在本类。</p>
+ */
 @Service
 public class BlogService {
     private static final int MAX_IMAGE_COUNT = 9;
+    private static final int DEFAULT_LIKED_BLOG_LIMIT = 10;
+    private static final int MAX_LIKED_BLOG_LIMIT = 50;
+    private static final int LIKE_PREVIEW_LIMIT = 5;
+    private static final String LOGIN_REQUIRED = "请先登录";
+
+    /**
+     * 点赞状态需要同时维护两个 ZSet：
+     * 1. 单篇笔记 -> 点赞用户；
+     * 2. 单个用户 -> 点赞笔记。
+     *
+     * <p>使用 Lua 是为了保证两份索引的写入/删除原子化，避免页面出现
+     * “笔记已点赞，但我的点赞列表没有记录”的中间态。</p>
+     */
     private static final DefaultRedisScript<Long> LIKE_SCRIPT = new DefaultRedisScript<>(
             """
                     if redis.call('zscore', KEYS[1], ARGV[1]) then
@@ -40,6 +61,8 @@ public class BlogService {
                     """,
             Long.class
     );
+
+    /** 数据库点赞数更新失败时，用这段脚本回滚 Redis 中已经切换的点赞状态。 */
     private static final DefaultRedisScript<Long> ROLLBACK_LIKE_SCRIPT = new DefaultRedisScript<>(
             """
                     if ARGV[2] == '1' then
@@ -61,6 +84,8 @@ public class BlogService {
     private final RedisIdWorker redisIdWorker;
     private final StringRedisTemplate stringRedisTemplate;
     private final FeedService feedService;
+    private final MqEventPublisher mqEventPublisher;
+    private final MqEventProperties mqEventProperties;
 
     public BlogService(BlogRepository blogRepository,
                        UserRepository userRepository,
@@ -68,7 +93,9 @@ public class BlogService {
                        FollowRepository followRepository,
                        RedisIdWorker redisIdWorker,
                        StringRedisTemplate stringRedisTemplate,
-                       FeedService feedService) {
+                       FeedService feedService,
+                       MqEventPublisher mqEventPublisher,
+                       MqEventProperties mqEventProperties) {
         this.blogRepository = blogRepository;
         this.userRepository = userRepository;
         this.shopRepository = shopRepository;
@@ -76,40 +103,38 @@ public class BlogService {
         this.redisIdWorker = redisIdWorker;
         this.stringRedisTemplate = stringRedisTemplate;
         this.feedService = feedService;
+        this.mqEventPublisher = mqEventPublisher;
+        this.mqEventProperties = mqEventProperties;
     }
 
+    /** 发布探店笔记，并把新笔记推送到作者粉丝的关注流。 */
     public Result<Long> saveBlog(BlogCreateDTO createDTO) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
-            return Result.fail("请先登录");
+            return Result.fail(LOGIN_REQUIRED);
         }
+
         Result<Void> validation = validateCreateDTO(createDTO);
         if (!validation.isSuccess()) {
             return Result.fail(validation.getErrorMsg());
         }
         if (shopRepository.findById(createDTO.getShopId()) == null) {
-            return Result.fail("商户不存在");
+            return Result.fail("店铺不存在");
         }
 
-        LocalDateTime now = LocalDateTime.now();
-        Blog blog = new Blog();
-        blog.setId(redisIdWorker.nextId("blog"));
-        blog.setShopId(createDTO.getShopId());
-        blog.setUserId(currentUser.getId());
-        blog.setTitle(createDTO.getTitle().trim());
-        blog.setImages(normalizeImages(createDTO.getImages()));
-        blog.setContent(createDTO.getContent().trim());
-        blog.setLiked(0);
-        blog.setComments(0);
-        blog.setCreateTime(now);
-        blog.setUpdateTime(now);
+        Blog blog = createBlog(createDTO, currentUser.getId());
         blogRepository.save(blog);
-        feedService.pushBlogToFollowers(currentUser.getId(), blog.getId());
+        BlogPublishedMessage message = new BlogPublishedMessage(currentUser.getId(), blog.getId(), LocalDateTime.now());
+        mqEventPublisher.publishOrRun(
+                mqEventProperties.getBlogPublishedTopic(),
+                message,
+                () -> feedService.pushBlogToFollowers(currentUser.getId(), blog.getId())
+        );
         return Result.ok(blog.getId());
     }
 
     public Result<BlogViewDTO> queryBlogById(Long id) {
-        if (id == null || id <= 0) {
+        if (!isPositiveId(id)) {
             return Result.fail("探店笔记ID不合法");
         }
         Blog blog = blogRepository.findById(id);
@@ -130,7 +155,7 @@ public class BlogService {
     public Result<List<BlogViewDTO>> queryMyBlog(Integer current) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
-            return Result.fail("请先登录");
+            return Result.fail(LOGIN_REQUIRED);
         }
         return Result.ok(toViewDTOList(blogRepository.findByUserId(currentUser.getId(), normalizeCurrent(current))));
     }
@@ -138,33 +163,35 @@ public class BlogService {
     public Result<List<BlogViewDTO>> queryMyLikedBlogs() {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
-            return Result.fail("璇峰厛鐧诲綍");
+            return Result.fail(LOGIN_REQUIRED);
         }
-        return Result.ok(queryUserLikedBlogs(currentUser.getId(), 10));
+        return Result.ok(queryUserLikedBlogs(currentUser.getId(), DEFAULT_LIKED_BLOG_LIMIT));
     }
 
     public Result<List<BlogViewDTO>> queryBlogByUser(Long userId, Integer current) {
-        if (userId == null || userId <= 0) {
+        if (!isPositiveId(userId)) {
             return Result.fail("用户ID不合法");
         }
         return Result.ok(toViewDTOList(blogRepository.findByUserId(userId, normalizeCurrent(current))));
     }
 
     public Result<List<BlogViewDTO>> queryBlogByShop(Long shopId, Integer current) {
-        if (shopId == null || shopId <= 0) {
-            return Result.fail("商户ID不合法");
+        if (!isPositiveId(shopId)) {
+            return Result.fail("店铺ID不合法");
         }
         if (shopRepository.findById(shopId) == null) {
-            return Result.fail("商户不存在");
+            return Result.fail("店铺不存在");
         }
         return Result.ok(toViewDTOList(blogRepository.findByShopId(shopId, normalizeCurrent(current))));
     }
 
+    /** 查询关注流。lastId 和 offset 是 Redis ZSet 滚动分页游标，不是普通页码。 */
     public Result<ScrollResultDTO<BlogViewDTO>> queryBlogOfFollow(Long lastId, Integer offset) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
-            return Result.fail("请先登录");
+            return Result.fail(LOGIN_REQUIRED);
         }
+
         ScrollResultDTO<Long> feedBlogIds = feedService.queryFeedBlogIds(currentUser.getId(), lastId, offset);
         List<BlogViewDTO> blogs = new ArrayList<>();
         for (Long blogId : feedBlogIds.getList()) {
@@ -176,10 +203,11 @@ public class BlogService {
         return Result.ok(new ScrollResultDTO<>(blogs, feedBlogIds.getMinTime(), feedBlogIds.getOffset()));
     }
 
+    /** 点赞或取消点赞。Redis 先切换状态，MySQL 点赞计数失败时再回滚 Redis。 */
     public Result<Void> likeBlog(Long id) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
-            return Result.fail("请先登录");
+            return Result.fail(LOGIN_REQUIRED);
         }
         Blog blog = blogRepository.findById(id);
         if (blog == null) {
@@ -187,17 +215,23 @@ public class BlogService {
         }
 
         String userId = String.valueOf(currentUser.getId());
-        String key = RedisConstants.BLOG_LIKED_KEY + id;
+        String blogLikedKey = RedisConstants.BLOG_LIKED_KEY + id;
         String userLikedKey = RedisConstants.BLOG_LIKED_USER_KEY + userId;
         String now = String.valueOf(System.currentTimeMillis());
-        Long action = stringRedisTemplate.execute(LIKE_SCRIPT, List.of(key, userLikedKey), userId, now, String.valueOf(id));
+        Long action = stringRedisTemplate.execute(LIKE_SCRIPT, List.of(blogLikedKey, userLikedKey), userId, now, String.valueOf(id));
         if (action == null) {
             return Result.fail("点赞失败，请稍后重试");
         }
 
         int affectedRows = action > 0 ? blogRepository.increaseLiked(id) : blogRepository.decreaseLiked(id);
         if (affectedRows == 0) {
-            stringRedisTemplate.execute(ROLLBACK_LIKE_SCRIPT, List.of(key, userLikedKey), userId, String.valueOf(action), now, String.valueOf(id));
+            stringRedisTemplate.execute(
+                    ROLLBACK_LIKE_SCRIPT,
+                    List.of(blogLikedKey, userLikedKey),
+                    userId,
+                    String.valueOf(action),
+                    now,
+                    String.valueOf(id));
             return Result.fail("点赞失败，请稍后重试");
         }
         return Result.ok(null);
@@ -206,35 +240,38 @@ public class BlogService {
     public Result<Void> deleteBlog(Long id) {
         UserDTO currentUser = UserHolder.getUser();
         if (currentUser == null) {
-            return Result.fail("璇峰厛鐧诲綍");
+            return Result.fail(LOGIN_REQUIRED);
         }
-        if (id == null || id <= 0) {
-            return Result.fail("鎺㈠簵绗旇ID涓嶅悎娉?");
+        if (!isPositiveId(id)) {
+            return Result.fail("探店笔记ID不合法");
         }
         Blog blog = blogRepository.findById(id);
         if (blog == null) {
-            return Result.fail("鎺㈠簵绗旇涓嶅瓨鍦?");
+            return Result.fail("探店笔记不存在");
         }
         if (!currentUser.getId().equals(blog.getUserId())) {
-            return Result.fail("鏃犳潈鍒犻櫎璇ョ瑪璁?");
+            return Result.fail("只能删除自己发布的探店笔记");
         }
+
         int affectedRows = blogRepository.deleteByIdAndUserId(id, currentUser.getId());
         if (affectedRows == 0) {
-            return Result.fail("鍒犻櫎澶辫触");
+            return Result.fail("删除失败");
         }
+        // 删除笔记后清理点赞集合，避免不存在的笔记仍展示残留点赞头像。
         stringRedisTemplate.delete(RedisConstants.BLOG_LIKED_KEY + id);
         return Result.ok(null);
     }
 
     public Result<List<UserDTO>> queryBlogLikes(Long id) {
-        if (id == null || id <= 0) {
+        if (!isPositiveId(id)) {
             return Result.fail("探店笔记ID不合法");
         }
         Set<String> userIds = stringRedisTemplate.opsForZSet()
-                .reverseRange(RedisConstants.BLOG_LIKED_KEY + id, 0, 4);
+                .reverseRange(RedisConstants.BLOG_LIKED_KEY + id, 0, LIKE_PREVIEW_LIMIT - 1);
         if (userIds == null || userIds.isEmpty()) {
             return Result.ok(List.of());
         }
+
         List<UserDTO> users = new ArrayList<>();
         for (String userId : userIds) {
             User user = userRepository.findById(Long.valueOf(userId));
@@ -245,10 +282,17 @@ public class BlogService {
         return Result.ok(users);
     }
 
+    /**
+     * 查询用户点赞过的笔记。
+     *
+     * <p>优先走“用户->笔记”的新索引；如果旧数据没有维护这份索引，
+     * 再回退扫描近期笔记，保证老用户仍能看到一部分历史点赞。</p>
+     */
     public List<BlogViewDTO> queryUserLikedBlogs(Long userId, int limit) {
-        int size = Math.max(1, Math.min(limit, 50));
+        int size = Math.max(1, Math.min(limit, MAX_LIKED_BLOG_LIMIT));
         Set<String> blogIds = stringRedisTemplate.opsForZSet()
                 .reverseRange(RedisConstants.BLOG_LIKED_USER_KEY + userId, 0, size - 1);
+
         List<Blog> likedBlogs = new ArrayList<>();
         if (blogIds != null && !blogIds.isEmpty()) {
             for (String blogId : blogIds) {
@@ -258,6 +302,7 @@ public class BlogService {
                 }
             }
         }
+
         if (likedBlogs.isEmpty()) {
             likedBlogs = blogRepository.findRecent(200).stream()
                     .filter(blog -> stringRedisTemplate.opsForZSet()
@@ -268,9 +313,25 @@ public class BlogService {
         return toViewDTOList(likedBlogs.stream().limit(size).toList());
     }
 
+    private Blog createBlog(BlogCreateDTO createDTO, Long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        Blog blog = new Blog();
+        blog.setId(redisIdWorker.nextId("blog"));
+        blog.setShopId(createDTO.getShopId());
+        blog.setUserId(userId);
+        blog.setTitle(createDTO.getTitle().trim());
+        blog.setImages(normalizeImages(createDTO.getImages()));
+        blog.setContent(createDTO.getContent().trim());
+        blog.setLiked(0);
+        blog.setComments(0);
+        blog.setCreateTime(now);
+        blog.setUpdateTime(now);
+        return blog;
+    }
+
     private Result<Void> validateCreateDTO(BlogCreateDTO createDTO) {
-        if (createDTO == null || createDTO.getShopId() == null || createDTO.getShopId() <= 0) {
-            return Result.fail("商户ID不合法");
+        if (createDTO == null || !isPositiveId(createDTO.getShopId())) {
+            return Result.fail("店铺ID不合法");
         }
         if (!StringUtils.hasText(createDTO.getTitle())) {
             return Result.fail("标题不能为空");
@@ -332,6 +393,10 @@ public class BlogService {
             return false;
         }
         return followRepository.exists(currentUser.getId(), authorId);
+    }
+
+    private boolean isPositiveId(Long id) {
+        return id != null && id > 0;
     }
 
     private int normalizeCurrent(Integer current) {

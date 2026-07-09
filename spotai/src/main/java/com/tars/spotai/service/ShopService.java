@@ -1,6 +1,8 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
 import com.tars.spotai.dto.Result;
+import com.tars.spotai.dto.ShopChangedMessage;
 import com.tars.spotai.entity.Shop;
 import com.tars.spotai.repository.ShopRepository;
 import com.tars.spotai.utils.CacheClient;
@@ -15,6 +17,7 @@ import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,13 +36,19 @@ public class ShopService {
     private final ShopRepository shopRepository;
     private final CacheClient cacheClient;
     private final StringRedisTemplate stringRedisTemplate;
+    private final MqEventPublisher mqEventPublisher;
+    private final MqEventProperties mqEventProperties;
 
     public ShopService(ShopRepository shopRepository,
                        CacheClient cacheClient,
-                       StringRedisTemplate stringRedisTemplate) {
+                       StringRedisTemplate stringRedisTemplate,
+                       MqEventPublisher mqEventPublisher,
+                       MqEventProperties mqEventProperties) {
         this.shopRepository = shopRepository;
         this.cacheClient = cacheClient;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.mqEventPublisher = mqEventPublisher;
+        this.mqEventProperties = mqEventProperties;
     }
 
     /* ========== 业务方法 ========== */
@@ -86,9 +95,18 @@ public class ShopService {
         }
 
         /* 4.3 删除缓存，下次读取时重建 */
-        cacheClient.delete(RedisConstants.CACHE_SHOP_KEY + shop.getId());
-        loadShopGeo();
+        ShopChangedMessage message = new ShopChangedMessage(shop.getId(), "UPDATED", LocalDateTime.now());
+        mqEventPublisher.publishOrRun(
+                mqEventProperties.getShopChangedTopic(),
+                message,
+                () -> handleShopChanged(shop.getId())
+        );
         return Result.ok(null);
+    }
+
+    public void handleShopChanged(Long shopId) {
+        cacheClient.delete(RedisConstants.CACHE_SHOP_KEY + shopId);
+        loadShopGeo();
     }
 
     public Result<List<Shop>> queryShopByType(Long typeId, Integer current, Double x, Double y) {

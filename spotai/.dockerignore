@@ -1,0 +1,9 @@
+target/
+*.log
+local-secrets.properties
+backend-restart.*.log
+
+.settings/
+.project
+.classpath
+*.iml

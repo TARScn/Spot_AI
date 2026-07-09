@@ -1,5 +1,7 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
+import com.tars.spotai.dto.ReviewSummaryRefreshMessage;
 import com.tars.spotai.repository.ReviewSummaryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.time.LocalDateTime;
 
 @Service
 public class ReviewSummaryRefreshScheduler {
@@ -17,18 +20,37 @@ public class ReviewSummaryRefreshScheduler {
 
     private final ReviewSummaryService summaryService;
     private final ReviewSummaryRepository summaryRepository;
+    private final MqEventPublisher mqEventPublisher;
+    private final MqEventProperties mqEventProperties;
 
     @Value("${spotai.ai.review-summary.refresh-batch-size:30}")
     private int refreshBatchSize;
 
     public ReviewSummaryRefreshScheduler(ReviewSummaryService summaryService,
-                                         ReviewSummaryRepository summaryRepository) {
+                                         ReviewSummaryRepository summaryRepository,
+                                         MqEventPublisher mqEventPublisher,
+                                         MqEventProperties mqEventProperties) {
         this.summaryService = summaryService;
         this.summaryRepository = summaryRepository;
+        this.mqEventPublisher = mqEventPublisher;
+        this.mqEventProperties = mqEventProperties;
     }
 
     @Async
     public void refreshAsync(Long shopId) {
+        ReviewSummaryRefreshMessage message = new ReviewSummaryRefreshMessage(
+                shopId,
+                "REVIEW_CHANGED",
+                LocalDateTime.now()
+        );
+        mqEventPublisher.publishOrRun(
+                mqEventProperties.getReviewSummaryTopic(),
+                message,
+                () -> refreshDirect(shopId)
+        );
+    }
+
+    public void refreshDirect(Long shopId) {
         try {
             summaryService.refreshSummaryNow(shopId);
         } catch (Exception e) {

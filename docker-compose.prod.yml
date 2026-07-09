@@ -1,0 +1,96 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: spotai-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "${MYSQL_PUBLIC_PORT:-3306}:3306"
+    volumes:
+      - spotai-mysql-data:/var/lib/mysql
+      - ./sql:/schema:ro
+
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: spotai-redis-stack
+    restart: unless-stopped
+    environment:
+      REDIS_ARGS: "--requirepass ${REDIS_PASSWORD}"
+    ports:
+      - "${REDIS_PUBLIC_PORT:-6379}:6379"
+    volumes:
+      - spotai-redis-data:/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: spotai-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MINIO_PUBLIC_PORT:-19000}:9000"
+      - "${MINIO_CONSOLE_PUBLIC_PORT:-19001}:9001"
+    volumes:
+      - spotai-minio-data:/data
+
+  spotai-backend:
+    image: ${SPOTAI_BACKEND_IMAGE:-spotai-backend:latest}
+    container_name: spotai-backend
+    restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis-stack
+      - minio
+    environment:
+      TZ: Asia/Shanghai
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx768m}
+      MYSQL_URL: jdbc:mysql://mysql:3306/spotai_0?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      MYSQL_USERNAME: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: redis-stack
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VECTOR_REDIS_HOST: redis-stack
+      VECTOR_REDIS_PORT: 6379
+      VECTOR_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_EXTERNAL_ENDPOINT: ${MINIO_EXTERNAL_ENDPOINT}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT:-465}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      DASHSCOPE_EMBEDDING_MODEL: ${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}
+      SPOTAI_AI_ENABLED: ${SPOTAI_AI_ENABLED:-false}
+      REVIEW_AI_ADMIN_KEY: ${REVIEW_AI_ADMIN_KEY:-}
+      SPOTAI_MQ_ENABLED: ${SPOTAI_MQ_ENABLED:-false}
+      SPOTAI_VOUCHER_MQ_ENABLED: ${SPOTAI_VOUCHER_MQ_ENABLED:-false}
+    ports:
+      - "${BACKEND_PUBLIC_PORT:-8080}:8080"
+
+  spotai-web:
+    image: ${SPOTAI_WEB_IMAGE:-spotai-web:latest}
+    container_name: spotai-web
+    restart: unless-stopped
+    depends_on:
+      - spotai-backend
+    ports:
+      - "${WEB_PUBLIC_PORT:-80}:80"
+
+volumes:
+  spotai-mysql-data:
+  spotai-redis-data:
+  spotai-minio-data:

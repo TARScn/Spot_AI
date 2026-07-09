@@ -1,5 +1,7 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
+import com.tars.spotai.dto.ShopChangedMessage;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.entity.Shop;
 import com.tars.spotai.repository.ShopRepository;
@@ -13,7 +15,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,13 +34,23 @@ class ShopServiceTest {
     private CacheClient cacheClient;
     @Mock
     private StringRedisTemplate stringRedisTemplate;
+    @Mock
+    private MqEventPublisher mqEventPublisher;
 
     private ShopService shopService;
+    private MqEventProperties mqEventProperties;
 
     /* 2. 测试初始化 */
     @BeforeEach
     void setUp() {
-        shopService = new ShopService(shopRepository, cacheClient, stringRedisTemplate);
+        mqEventProperties = new MqEventProperties();
+        shopService = new ShopService(
+                shopRepository,
+                cacheClient,
+                stringRedisTemplate,
+                mqEventPublisher,
+                mqEventProperties
+        );
     }
 
     /* ========== queryById() 测试 ========== */
@@ -113,14 +124,16 @@ class ShopServiceTest {
         /* 5. 更新成功：写 DB + 删缓存 */
         Shop shop = shop(3L);
         when(shopRepository.updateById(shop)).thenReturn(1);
-        when(shopRepository.findAll()).thenReturn(List.of());
 
         Result<Void> result = shopService.update(shop);
 
         assertThat(result.isSuccess()).isTrue();
         verify(shopRepository).updateById(shop);
-        verify(cacheClient).delete(RedisConstants.CACHE_SHOP_KEY + shop.getId());
-        verify(shopRepository).findAll();
+        verify(mqEventPublisher).publishOrRun(
+                eq("spotai.shop.changed"),
+                any(ShopChangedMessage.class),
+                any(Runnable.class)
+        );
     }
 
     @Test
@@ -134,6 +147,16 @@ class ShopServiceTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getErrorMsg()).isEqualTo("商户不存在");
         verify(cacheClient, never()).delete(RedisConstants.CACHE_SHOP_KEY + shop.getId());
+    }
+
+    @Test
+    void shopChangedConsumerDelegatesToShopService() {
+        ShopService service = org.mockito.Mockito.mock(ShopService.class);
+        ShopChangedConsumer consumer = new ShopChangedConsumer(service);
+
+        consumer.onMessage(new ShopChangedMessage(3L, "UPDATED", null));
+
+        verify(service).handleShopChanged(3L);
     }
 
     /* ========== 测试辅助方法 ========== */

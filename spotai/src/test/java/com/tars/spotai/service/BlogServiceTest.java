@@ -1,5 +1,7 @@
 package com.tars.spotai.service;
 
+import com.tars.spotai.config.MqEventProperties;
+import com.tars.spotai.dto.BlogPublishedMessage;
 import com.tars.spotai.dto.BlogCreateDTO;
 import com.tars.spotai.dto.Result;
 import com.tars.spotai.dto.UserDTO;
@@ -52,13 +54,26 @@ class BlogServiceTest {
     @Mock
     private FeedService feedService;
     @Mock
+    private MqEventPublisher mqEventPublisher;
+    @Mock
     private ZSetOperations<String, String> zSetOperations;
 
     private BlogService blogService;
+    private MqEventProperties mqEventProperties;
 
     @BeforeEach
     void setUp() {
-        blogService = new BlogService(blogRepository, userRepository, shopRepository, followRepository, redisIdWorker, stringRedisTemplate, feedService);
+        mqEventProperties = new MqEventProperties();
+        blogService = new BlogService(
+                blogRepository,
+                userRepository,
+                shopRepository,
+                followRepository,
+                redisIdWorker,
+                stringRedisTemplate,
+                feedService,
+                mqEventPublisher,
+                mqEventProperties);
     }
 
     @AfterEach
@@ -82,7 +97,11 @@ class BlogServiceTest {
         assertThat(captor.getValue().getUserId()).isEqualTo(1001L);
         assertThat(captor.getValue().getLiked()).isZero();
         assertThat(captor.getValue().getComments()).isZero();
-        verify(feedService).pushBlogToFollowers(1001L, 9001L);
+        verify(mqEventPublisher).publishOrRun(
+                eq("spotai.blog.published"),
+                any(BlogPublishedMessage.class),
+                any(Runnable.class)
+        );
     }
 
     @Test
@@ -93,6 +112,15 @@ class BlogServiceTest {
         assertThat(result.getErrorMsg()).isEqualTo("请先登录");
         verify(blogRepository, never()).save(any());
         verify(feedService, never()).pushBlogToFollowers(any(), any());
+    }
+
+    @Test
+    void blogPublishedConsumerPushesBlogToFollowers() {
+        BlogPublishedConsumer consumer = new BlogPublishedConsumer(feedService);
+
+        consumer.onMessage(new BlogPublishedMessage(1001L, 9001L, null));
+
+        verify(feedService).pushBlogToFollowers(1001L, 9001L);
     }
 
     @Test

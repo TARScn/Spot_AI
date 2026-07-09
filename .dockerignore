@@ -1,0 +1,31 @@
+# Git and IDE
+.git
+.gitignore
+.vscode
+.idea
+.agents
+.codex-logs
+.kilo
+
+# Logs and local runtime files
+*.log
+log/
+logs/
+queryex
+broker.log
+backend-restart.*.log
+spotai-*.log
+
+# Local secrets
+.env
+.env.*
+spotai/local-secrets.properties
+
+# Build outputs and dependencies
+spotai/target/
+web/node_modules/
+web/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
