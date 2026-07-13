@@ -274,14 +274,3 @@ mvn test
 - `doc/Spot_AI_探店功能实现说明.md`：探店笔记与 Feed 流。
 - `doc/Spot_AI_Docker部署说明.md`：Docker 部署补充说明。
 
-## 开发约定
-
-- 真实密钥放在 `spotai/local-secrets.properties` 或生产 `.env`，不要提交到 Git。
-- 前端新增接口时优先在 `web/src` 中做数据归一化，避免 19 位 ID 等大整数在浏览器中丢精度。
-- 后端新增业务接口时保持 Controller、Service、Repository 分层。
-- AI 工具调用涉及真实操作时，需要前端确认卡片，避免模型直接执行有副作用的动作。
-- 移动端是主要体验入口，新增页面需要同时检查 430px 左右宽度的布局。
-
-## License
-
-当前仓库未声明开源许可证。若计划公开发布，请先补充合适的 License 文件。
