@@ -1,320 +1,146 @@
 # Spot AI Redis 缓存说明
 
-## 1. 文档目的
+> 核对日期：2026-07-14  
+> 核对范围：`RedisConstants`、`CacheClient`、`UserService`、`ShopService`、`BlogService`、`VoucherService`、`SignService`、`UvStatsService`、RAG 相关配置。
 
-本文说明 Spot AI 当前 Redis 缓存的设计思路，包括缓存更新策略、缓存穿透、缓存雪崩、缓存击穿等常见问题，以及项目中的解决方案。
+## 1. Redis 使用范围
 
-当前缓存能力主要封装在：
+当前项目使用 Redis / Redis Stack 承担以下能力：
 
-```text
-spotai/src/main/java/com/tars/spotai/utils/CacheClient.java
-```
-
-当前使用缓存的业务：
-
-| 业务 | Redis Key | 说明 |
-|---|---|---|
-| 短信验证码 | `login:code:{phone}` | 保存登录验证码，短 TTL。 |
-| 登录 token | `login:token:{token}` | 保存登录用户摘要，请求命中后刷新 TTL。 |
-| 商户详情 | `cache:shop:{id}` | 保存商户详情，使用逻辑过期。 |
-| 商户缓存重建锁 | `lock:shop:{id}` | 逻辑过期后异步重建缓存时使用。 |
+| 场景 | Key 前缀 | 实现类 |
+| --- | --- | --- |
+| 邮箱验证码 | `login:code:{email}` | `UserService` |
+| 登录态 Token | `login:token:{token}` | `UserService`、`RefreshTokenInterceptor` |
+| 店铺详情缓存 | `cache:shop:{shopId}` | `ShopService`、`CacheClient` |
+| 店铺缓存重建锁 | `lock:shop:{shopId}` | `CacheClient` |
+| 秒杀库存 | `seckill:stock:{voucherId}` | `VoucherService` |
+| 秒杀已下单用户 | `seckill:order:{voucherId}` | `VoucherService` |
+| 用户订单锁 | `lock:order:{userId}:{voucherId}` | `VoucherService` |
+| 笔记点赞明细 | `blog:liked:{blogId}` | `BlogService` |
+| 用户点赞笔记 | `blog:liked:user:{userId}` | `BlogService` |
+| 关注集合 | `follows:{userId}` | `FollowService` |
+| 粉丝集合 | `followers:{userId}` | `FollowService` |
+| 关注 Feed | `feed:user:{userId}` | `FeedService` |
+| 店铺 GEO | `shop:geo:{typeId}` | `ShopService` |
+| 签到 BitMap | `sign:{userId}:{yyyyMM}` | `SignService` |
+| 全站 UV | `uv:site:{yyyyMMdd}` | `UvStatsService` |
+| 店铺 UV | `uv:shop:{shopId}:{yyyyMMdd}` | `UvStatsService` |
+| 笔记 UV | `uv:blog:{blogId}:{yyyyMMdd}` | `UvStatsService` |
+| 页面 UV | `uv:page:{pageCode}:{yyyyMMdd}` | `UvStatsService` |
+| 评论摘要缓存 | `review:summary:{shopId}` | `ReviewSummaryService` |
+| 评论向量索引 | `review:vector:*` / `review_vector_idx` | `ReviewAiConfig`、`ReviewRagIndexService` |
 
 ## 2. 缓存工具类
 
-`CacheClient` 基于 `StringRedisTemplate` 封装，统一处理 JSON 序列化、TTL、逻辑过期、缓存空值和互斥锁。
+`CacheClient` 封装了三类常见缓存模式：
 
-### 2.1 普通写缓存
+- 普通 TTL 缓存：`set`。
+- 空值缓存：用于缓存穿透保护。
+- 逻辑过期缓存：用于店铺详情，过期后异步重建。
 
-方法：
+店铺详情当前通过 `ShopService` 读取：
 
-```java
-cacheClient.set(key, value, ttl, unit);
-```
+1. 查 Redis `cache:shop:{shopId}`。
+2. 命中且未逻辑过期则直接返回。
+3. 未命中或过期时回源 MySQL `tb_shop`。
+4. 重建期间用 `lock:shop:{shopId}` 防止并发击穿。
 
-作用：
+## 3. 登录缓存
 
-- 将任意 Java 对象序列化为 JSON。
-- 写入 String 类型 Redis key。
-- 设置物理 TTL。
-- 在原始 TTL 基础上追加 0 到 300 秒随机时间，降低大量 key 同时过期导致缓存雪崩的风险。
-
-适用场景：
-
-- 数据允许自然过期。
-- 缓存重建成本不高。
-- 对热点并发没有特别高的要求。
-
-### 2.2 逻辑过期写缓存
-
-方法：
-
-```java
-cacheClient.setWithLogicalExpire(key, value, ttl, unit);
-```
-
-Redis 中保存的数据结构：
-
-```json
-{
-  "data": {},
-  "expireTime": "2026-06-09T13:30:00"
-}
-```
-
-说明：
-
-- Redis key 本身通常不设置业务 TTL。
-- 是否过期由 `expireTime` 判断。
-- 逻辑过期后仍可以先返回旧数据，再异步重建缓存。
-
-适用场景：
-
-- 热点数据。
-- 不能让大量请求同时打到数据库。
-- 可以接受短时间返回旧数据。
-
-## 3. 缓存更新策略
-
-### 3.1 常见策略
-
-| 策略 | 做法 | 优点 | 风险 |
-|---|---|---|---|
-| 先更新数据库，再删除缓存 | 写库成功后删除缓存 | 简单，较常用，最终一致性较好 | 删除缓存失败会短时间读到旧缓存。 |
-| 先删除缓存，再更新数据库 | 删除缓存后写库 | 实现简单 | 并发下可能把旧数据重新写入缓存。 |
-| 更新数据库，再更新缓存 | 写库成功后直接覆盖缓存 | 读请求更容易命中新值 | 并发写入时可能旧值覆盖新值。 |
-| 延迟双删 | 删除缓存，更新数据库，延迟后再删一次 | 降低并发脏缓存概率 | 实现和时序更复杂。 |
-
-### 3.2 Spot AI 当前策略
-
-商户更新接口采用：
+当前登录方式是邮箱验证码，不是手机号验证码。
 
 ```text
-先更新数据库，再删除缓存
+login:code:{email} -> 6 位验证码，TTL 由 spotai.auth.code-ttl-minutes 控制
+login:token:{token} -> 用户 Hash，TTL 由 spotai.auth.token-ttl-minutes 控制
 ```
 
-代码位置：
+`RefreshTokenInterceptor` 每次请求会读取 `login:token:{token}` 并刷新 TTL。
+
+## 4. 店铺 GEO
+
+`/shop/geo/load` 会把 `tb_shop.x/y` 预热到 Redis GEO：
 
 ```text
-ShopService.update(...)
+shop:geo:{typeId}
+member = shopId
+longitude = tb_shop.x
+latitude = tb_shop.y
 ```
 
-流程：
+`GET /shop/of/type?typeId=...&x=...&y=...` 在传入经纬度时优先使用 Redis GEO 做附近查询。
 
-1. 校验商户 ID。
-2. 更新 MySQL `tb_shop`。
-3. 更新成功后删除 Redis：`cache:shop:{id}`。
-4. 下一次查询商户详情时重新回源数据库，并写入缓存。
+## 5. 签到
 
-选择原因：
-
-- 实现简单。
-- 适合当前项目阶段。
-- 避免直接更新缓存时出现并发旧值覆盖新值的问题。
-
-后续增强方向：
-
-- 删除缓存失败时记录告警。
-- 使用消息队列或重试任务保证缓存最终删除。
-- 对强一致场景增加版本号或更新时间校验。
-
-## 4. 缓存穿透
-
-### 4.1 问题说明
-
-缓存穿透是指请求查询一个数据库中不存在的数据。因为缓存没有，数据库也没有，所以每次请求都会打到数据库。
-
-典型例子：
+签到只使用 Redis BitMap，不落 `tb_sign`：
 
 ```text
-GET /shop/999999999
+sign:{userId}:{yyyyMM}
 ```
 
-如果该商户不存在，攻击者或异常客户端持续请求该 ID，会绕过缓存直接压垮数据库。
+`POST /user/sign` 将当天 bit 置为 1；`GET /user/sign/count` 通过 `BITFIELD` 计算当月连续签到天数。
 
-### 4.2 常见解决方案
+## 6. 点赞与关注 Feed
 
-| 方案 | 说明 | 适用性 |
-|---|---|---|
-| 缓存空值 | 数据库查不到时，Redis 写入空字符串或特殊空对象，设置短 TTL。 | 简单有效，适合大多数业务。 |
-| 布隆过滤器 | 请求先经过布隆过滤器，判断 ID 是否可能存在。 | 适合数据量大、非法请求多的场景。 |
-| 参数校验 | 对 ID、手机号等参数做格式和范围校验。 | 必须做，但不能完全替代缓存空值。 |
+笔记点赞：
 
-### 4.3 Spot AI 当前方案
+- `blog:liked:{blogId}`：ZSet，member 为 userId，score 为时间戳。
+- `blog:liked:user:{userId}`：ZSet，member 为 blogId，score 为时间戳。
+- MySQL `tb_blog.liked` 保存计数。
 
-项目使用“缓存空值”解决缓存穿透。
+关注关系：
 
-代码位置：
+- MySQL `tb_follow` 是事实来源。
+- Redis `follows:{userId}`、`followers:{userId}` 做查询加速。
+- `feed:user:{userId}` 是关注 Feed 收件箱。
 
-```text
-CacheClient.queryWithPassThrough(...)
-CacheClient.queryWithLogicalExpire(...)
+## 7. 秒杀券
+
+秒杀券抢单使用 Lua 原子脚本：
+
+1. 检查 `seckill:stock:{voucherId}` 是否大于 0。
+2. 检查 `seckill:order:{voucherId}` 是否已包含当前用户。
+3. 成功则库存 `decr`，用户加入 Set。
+
+如果订单落库失败，`VoucherService` 会回滚 Redis 库存和用户下单标记，并在必要时写入 `tb_rollback_failure_log`。
+
+## 8. 评论 RAG
+
+评论 RAG 使用 Redis Stack 向量索引：
+
+- 索引名：`review_vector_idx`
+- Key 前缀：`review:vector:`
+- 元数据表：`tb_review_embedding`
+- 摘要表：`tb_review_summary`
+- 摘要缓存：`review:summary:{shopId}`
+
+摘要本体以 MySQL 为准，Redis 只做缓存和向量检索加速。
+
+## 9. 配置
+
+主要配置位于 `application.yml`：
+
+```yaml
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+
+spotai:
+  ai:
+    review-summary:
+      vector-redis:
+        host: ${VECTOR_REDIS_HOST:localhost}
+        port: ${VECTOR_REDIS_PORT:6380}
+        password: ${VECTOR_REDIS_PASSWORD:${REDIS_PASSWORD:}}
 ```
 
-规则：
+本地如果 Redis Stack 跑在 WSL，需要确保 Windows 能访问对应端口。
 
-| Key | Value | TTL |
-|---|---|---|
-| `cache:shop:{id}` | 空字符串 `""` | 2 分钟 |
+## 10. 当前边界
 
-流程：
-
-1. 查询 Redis。
-2. Redis 未命中，查询 MySQL。
-3. MySQL 也不存在，Redis 写入空字符串。
-4. 后续请求命中空字符串，直接返回不存在，不再查 MySQL。
-
-## 5. 缓存雪崩
-
-### 5.1 问题说明
-
-缓存雪崩是指大量缓存 key 在同一时间失效，导致大量请求瞬间打到数据库。
-
-常见原因：
-
-- 批量缓存使用相同 TTL。
-- Redis 宕机。
-- 缓存预热任务同时写入大量同 TTL 数据。
-
-### 5.2 常见解决方案
-
-| 方案 | 说明 |
-|---|---|
-| TTL 加随机值 | 给缓存 TTL 增加随机秒数，避免同一时间集中失效。 |
-| 热点数据逻辑过期 | 热点 key 不依赖物理过期，过期后异步重建。 |
-| Redis 高可用 | 使用主从、哨兵或集群降低 Redis 故障影响。 |
-| 限流和降级 | Redis 不可用或数据库压力过大时限制请求量。 |
-| 缓存预热分批执行 | 避免大量 key 同时写入并同时过期。 |
-
-### 5.3 Spot AI 当前方案
-
-当前已落地：
-
-- 商户热点数据使用逻辑过期，避免热点 key 到期瞬间失效。
-- 普通 TTL 缓存写入时增加随机过期时间，避免同一批缓存集中失效。
-- 登录验证码和 token 设置较短 TTL，业务影响范围较小。
-
-建议后续补充：
-
-- 对热点商户做启动或定时缓存预热。
-- Redis 生产环境使用哨兵或集群。
-- 增加接口限流和降级策略。
-
-## 6. 缓存击穿
-
-### 6.1 问题说明
-
-缓存击穿是指某一个热点 key 突然失效，大量并发请求同时查询这个 key，导致数据库被瞬间打爆。
-
-它和缓存雪崩的区别：
-
-| 问题 | 范围 |
-|---|---|
-| 缓存雪崩 | 大量 key 同时失效。 |
-| 缓存击穿 | 单个热点 key 失效。 |
-
-典型例子：
-
-```text
-cache:shop:1
-```
-
-如果商户 1 是热点商户，缓存刚好过期时有大量请求进入，就会同时访问 MySQL。
-
-### 6.2 常见解决方案
-
-| 方案 | 说明 | 特点 |
-|---|---|---|
-| 互斥锁 | 缓存失效后，只有一个请求拿锁查询数据库并重建缓存。 | 数据较新，但其他请求可能等待。 |
-| 逻辑过期 | 缓存不物理删除，过期后先返回旧值，由拿到锁的请求异步重建。 | 性能稳定，但短时间可能返回旧数据。 |
-
-### 6.3 Spot AI 当前方案
-
-商户详情使用“逻辑过期 + Redis 互斥锁 + 异步重建”解决缓存击穿。
-
-代码位置：
-
-```text
-CacheClient.queryWithLogicalExpire(...)
-ShopService.queryById(...)
-```
-
-Redis 数据：
-
-| Key | Value | 说明 |
-|---|---|---|
-| `cache:shop:{id}` | `{data, expireTime}` | 商户详情和逻辑过期时间。 |
-| `lock:shop:{id}` | `1` | 缓存重建锁。 |
-
-流程：
-
-1. 查询 `cache:shop:{id}`。
-2. Redis 未命中，查询 MySQL，写入逻辑过期缓存。
-3. Redis 命中且未逻辑过期，直接返回。
-4. Redis 命中但已逻辑过期，先返回旧数据。
-5. 尝试获取 `lock:shop:{id}`。
-6. 获取锁成功，提交异步任务查询 MySQL 并重建缓存。
-7. 获取锁失败，不查询数据库，直接返回旧数据。
-8. 异步重建完成后释放锁。
-
-优点：
-
-- 热点 key 逻辑过期时，请求仍能快速返回。
-- 只有一个线程重建缓存，降低数据库压力。
-- 用户不会因为缓存重建而明显等待。
-
-代价：
-
-- 在缓存重建完成前，可能短时间返回旧数据。
-- 需要缓存预热或首次请求回源建立逻辑过期缓存。
-
-## 7. 当前项目缓存参数
-
-| 常量 | 值 | 说明 |
-|---|---|---|
-| `CACHE_SHOP_KEY` | `cache:shop:` | 商户详情缓存前缀。 |
-| `CACHE_SHOP_TTL_MINUTES` | `30` | 商户详情逻辑过期时间。 |
-| `CACHE_RANDOM_TTL_SECONDS` | `300` | 普通 TTL 缓存最大随机追加秒数。 |
-| `CACHE_NULL_TTL_MINUTES` | `2` | 空值缓存 TTL。 |
-| `LOCK_SHOP_KEY` | `lock:shop:` | 商户缓存重建锁前缀。 |
-| `CACHE_REBUILD_LOCK_TTL_SECONDS` | `10` | 缓存重建锁 TTL。 |
-| `LOGIN_CODE_KEY` | `login:code:` | 登录验证码 key 前缀。 |
-| `LOGIN_TOKEN_KEY` | `login:token:` | 登录 token key 前缀。 |
-
-## 8. 使用建议
-
-新增缓存业务时优先使用 `CacheClient`，不要在业务层重复编写 Redis JSON 读写逻辑。
-
-普通数据可使用：
-
-```java
-cacheClient.queryWithPassThrough(
-        keyPrefix,
-        id,
-        Entity.class,
-        repository::findById,
-        ttl,
-        TimeUnit.MINUTES
-);
-```
-
-热点数据可使用：
-
-```java
-cacheClient.queryWithLogicalExpire(
-        keyPrefix,
-        id,
-        Entity.class,
-        repository::findById,
-        ttl,
-        TimeUnit.MINUTES,
-        lockKeyPrefix
-);
-```
-
-数据更新时建议：
-
-```text
-先更新数据库，再删除缓存
-```
-
-对于特别核心的数据，可以继续增加删除缓存失败重试、消息队列异步补偿或版本号校验。
+- `tb_sign` 已从当前主 SQL 中移除，签到暂不做 MySQL 审计。
+- 点赞用户明细主要在 Redis，MySQL 只保存计数。
+- Redis Stack 向量索引可由 `tb_review_embedding` 元数据重建。
+- 生产环境不要把 Redis 端口暴露到公网。

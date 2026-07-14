@@ -1,198 +1,136 @@
-# Spot AI Agent 与记忆管理说明
+# Spot AI AI Agent 与记忆管理说明
 
-## 1. 当前结论
+> 核对日期：2026-07-14  
+> 核对范围：`SpringAiChatService`、`SpotAiChatTools`、AI 相关 Repository、`AiChatController`、前端 AI 助手。
 
-Spot AI 采用“一入口 AI 助手 + 后端 Agent/Tool 分工 + 分层记忆”的方案。
+## 1. 当前实现结论
 
-当前版本不直接上复杂 Graph 编排，而是先用 `SpringAiChatService` 作为协调层：
+当前项目没有引入 Spring AI Alibaba Graph 的 `RoutingAgent` / `SequentialAgent` 编排，也没有直接使用 Spring AI Alibaba 的长期 `MemoryStore` 组件。实际实现采用的是：
 
-- 用 `ChatClient.defaultTools(spotAiChatTools)` 让模型按需调用工具。
-- 用 `PreferenceExtractorAgent` 抽取长期偏好。
-- 用 `ConversationSummaryAgent` 压缩溢出的历史对话。
-- 用 `AgentMemorySelectionPolicy` 控制不同路由可见的长期记忆 namespace。
-- 用 `RecommendationPreferenceResolver` 将用户问题、偏好记忆、历史摘要转换为店铺推荐筛选条件。
+- `SpringAiChatService` 作为 AI 对话协调器。
+- `ChatClient.builder(chatModel).defaultTools(spotAiChatTools).build()` 注册工具。
+- DeepSeek 作为 OpenAI 兼容聊天模型。
+- DashScope 作为向量化模型。
+- MySQL 自建表保存长期记忆和对话历史。
+- `AiContextWindowService` 控制上下文窗口，避免无限历史进入模型。
+- 前端 `AiChatWidget` 展示 Markdown、店铺链接和工具确认卡片。
 
-这样可以先保证找店、评价总结、优惠查询和推荐链路稳定，再逐步迁移到 Spring AI Alibaba Multi-agent / Graph。
+这套方案已经覆盖当前核心场景：找店推荐、查询店铺详情、评价总结、优惠查询、优惠券确认领取、用户偏好记忆和历史展示。
 
-## 2. 官方依据
+## 2. Agent 分层
 
-- Spring AI Alibaba README: https://github.com/alibaba/spring-ai-alibaba
-- Spring AI Alibaba Multi-agent: https://java2ai.com/docs/frameworks/agent-framework/advanced/multi-agent/
-- Spring AI Alibaba Agent Tool: https://java2ai.com/docs/frameworks/agent-framework/advanced/agent-tool/
-- Spring AI Alibaba Memory: https://java2ai.com/docs/frameworks/agent-framework/advanced/memory/
-- Spring AI Chat Memory: https://docs.spring.io/spring-ai/reference/api/chat-memory.html
+| 层级 | 当前类 | 作用 |
+| --- | --- | --- |
+| 对话协调 | `SpringAiChatService` | 构建 prompt、上下文、记忆、业务上下文并调用模型 |
+| 工具执行 | `SpotAiChatTools` | 暴露 `@Tool` 方法，由模型决定是否调用 |
+| 偏好提取 | `SpringAiPreferenceExtractorAgent` | 从用户消息中提取预算、口味、商圈、场景等偏好 |
+| 历史摘要 | `SpringAiConversationSummaryAgent` | 对历史对话做摘要，减少上下文长度 |
+| 短期记忆 | `AiShortTermMemoryService` | 按用户取最近对话 |
+| 长期记忆 | `UserMemoryStore` / `MysqlUserMemoryStore` | 用 namespace/key 语义保存用户偏好 |
+| 工具审计 | `AiToolCallLogService` | 记录工具名、风险等级、输入输出、确认状态 |
 
-核心依据：
+## 3. 可用工具
 
-1. Spring AI / Spring AI Alibaba 区分短期对话记忆和长期记忆。
-2. `ChatMemory` 服务于当前模型调用，不等于完整聊天历史。
-3. 完整历史应单独保存，用于页面展示、审计和摘要。
-4. 长期记忆适合用 `namespace + key + JSON` 表达结构化偏好。
-5. 多 Agent 的关键是上下文工程：不同 Agent/Tool 只看完成任务需要的信息。
+| 工具 | 风险等级 | 能力 |
+| --- | --- | --- |
+| `searchShop` | low | 按关键词检索商家，返回可点击 `spotai://shop/{id}` 链接 |
+| `queryShopDetail` | low | 查询店铺名称、评分、人均、地址、营业时间等 |
+| `recommendShops` | low | 按预算、关键词、商圈、评分、距离和评价摘要推荐店铺 |
+| `queryReviewSummary` | low | 查询店铺评论 AI 摘要 |
+| `queryCoupons` | low | 查询店铺可用优惠券 |
+| `claimCoupon` | medium | 领取普通代金券，需要前端确认卡片后执行 |
 
-## 3. 已实现分层
+当前没有让 AI 直接执行高风险秒杀下单或取消订单。
 
-| 层 | 当前实现 | 用途 |
-|---|---|---|
-| 短期上下文 | `AiShortTermMemoryService` + Spring AI `ChatMemory` | 登录用户当前会话窗口 |
-| 窗口裁剪 | `AiContextWindowService` + `MessageWindowChatMemory` | 同时控制进入 prompt 的最近消息数量和字符预算 |
-| 完整历史 | `AiConversationRepository` / `tb_ai_conversation_*` | 前端历史展示、审计、摘要来源 |
-| 长期偏好 | `UserMemoryStore` / `MysqlUserMemoryStore` / `tb_ai_user_memory_*` | 预算、口味、商圈、优惠偏好 |
-| 历史摘要 | `conversation.summary.default` | 将溢出的旧对话压缩为可复用线索 |
-| 记忆选择 | `AgentMemorySelectionPolicy` | 按路由选择可见 namespace |
-| 推荐解析 | `RecommendationPreferenceResolver` | 从问题和记忆中推导推荐条件 |
+## 4. 对话流程
 
-## 4. 聊天调用流程
+1. 前端调用 `POST /ai/chat`，可携带 `message`、`shopId`、`history`。
+2. 后端识别用户身份：游客历史只由前端保存；登录用户历史会写入 MySQL。
+3. `SpringAiChatService` 读取最近对话、长期偏好、当前店铺上下文。
+4. `AiContextWindowService` 按消息数和字符数裁剪上下文。
+5. `ChatClient` 调用 DeepSeek，并允许模型调用 `SpotAiChatTools`。
+6. 低风险工具直接执行；中风险工具返回确认请求。
+7. 前端显示 AI 回复、店铺链接、工具确认卡片。
+8. 登录用户的对话、工具调用和偏好更新写入数据库。
 
-```text
-用户输入
--> 识别用户登录态
--> 登录用户优先读取 ChatMemory 短期上下文
-   -> 短期记忆为空/失败时回退 MySQL 完整历史
--> AiContextWindowService 按消息数和字符预算裁剪上下文窗口
--> determineAgentRoute 判断 SHOP_GUIDE / REVIEW_RAG / COUPON / ORDER_GUARD / CHAT
--> AgentMemorySelectionPolicy 读取相关长期记忆
--> 对推荐请求预先调用 recommendShops 生成候选
--> ChatClient + SpotAiChatTools 生成回答
--> MySQL 保存完整 user/assistant 历史
--> ChatMemory 写入当前轮 user/assistant 短期记忆
--> PreferenceExtractorAgent 抽取长期偏好
--> 旧历史溢出时写入 conversation.summary.default
+## 5. 记忆管理
+
+### 5.1 对话历史
+
+| 表 | 说明 |
+| --- | --- |
+| `tb_ai_conversation_0`、`tb_ai_conversation_1` | 保存登录用户的用户消息、AI 回复、店铺上下文和工具元数据 |
+
+游客未登录时，历史只保存在前端 localStorage；登录后通过后端接口保存和读取。
+
+### 5.2 长期偏好
+
+| 表 | 说明 |
+| --- | --- |
+| `tb_ai_user_memory_0`、`tb_ai_user_memory_1` | 保存用户长期偏好，例如预算、口味、商圈、场景、优惠倾向 |
+
+当前长期记忆使用自建 `UserMemoryStore` 接口，语义上接近 MemoryStore：`namespace + memoryKey + summary + metadata`。如果后续引入 Spring AI Alibaba MemoryStore，可以优先替换 `MysqlUserMemoryStore` 底层实现，而不改变业务层调用。
+
+## 6. 上下文窗口
+
+配置项位于 `application.yml`：
+
+```yaml
+spotai:
+  ai:
+    chat:
+      context-window-max-messages: 12
+      context-window-max-chars: 2400
+      visible-history-max-messages: 20
+      history-max-chars: 800
+      memory-max-chars: 800
+      memory-total-max-chars: 1600
 ```
 
-## 5. 记忆写入规则
+设计原则：
 
-长期偏好：
+- 最近对话优先。
+- 当前店铺上下文优先。
+- 长期偏好只放摘要，不放完整原始历史。
+- 历史过长时使用摘要和裁剪，避免超出模型上下文。
 
-- 未登录用户不写长期记忆。
-- 只保存明确、稳定的偏好，例如预算、口味、商圈、忌口。
-- 低置信度候选不写入。
-- 相同 key、相同 JSON、置信度没有提升时跳过写入。
-- 相同内容但置信度提升时允许更新。
-- 内容变化时允许更新。
+## 7. 前端能力
 
-历史摘要：
+- AI 悬浮助手在任意页面可打开。
+- 只有在店铺详情页才显示当前店铺名。
+- AI 回复支持 Markdown 渲染。
+- `spotai://shop/{id}` 会在前端转换为可点击店铺详情链接。
+- 中风险工具调用展示确认卡片，用户点击确认后调用 `POST /ai/tool/confirm`。
+- “我的”页面可查看部分 AI 历史和长期记忆，并支持删除。
 
-- 当完整历史超过上下文窗口的消息数或字符预算时，将旧消息交给 `ConversationSummaryAgent`。
-- 摘要写入 `conversation.summary.default`。
-- 摘要内容不变且置信度没有提升时跳过写入。
-- 当 LLM 摘要失败时，使用规则摘要兜底。
+## 8. 接口
 
-上下文窗口：
-
-- `ChatMemory` 只负责当前会话的短期消息窗口，不作为完整历史库。
-- `AiContextWindowService` 先使用 Spring AI `MessageWindowChatMemory` 保留最近消息，再按 `context-window-max-chars` 从新到旧压缩进入 prompt 的历史。
-- 如果最新一条历史消息本身超过字符预算，会截断该消息，避免空窗口。
-- 长期记忆进入 prompt 前先按 Agent 路由筛选 namespace，再按 `memory-max-chars` 控制单条记忆长度，按 `memory-total-max-chars` 控制本轮可见长期记忆总长度。
-- 完整历史仍保存在 MySQL，用于前端展示、审计和溢出摘要。
-
-## 6. 推荐链路
-
-推荐请求会综合三类信息：
-
-1. 用户当前问题，例如“推荐几家人均 50 左右的火锅店”。
-2. 长期偏好，例如 `dining.preference.budget`、`dining.preference.taste`、`dining.preference.area`。
-3. 历史摘要，例如 `conversation.summary.default` 中的预算、口味、区域线索。
-
-`RecommendationPreferenceResolver` 会解析出：
-
-```text
-minPrice / maxPrice
-keyword
-area
-limit
-```
-
-然后调用：
-
-```java
-spotAiChatTools.recommendShops(minPrice, maxPrice, keyword, area, 5)
-```
-
-工具返回的店铺包含 `spotai://shop/{id}` 链接，前端 AI 聊天窗口可以跳转到店铺详情。
-
-## 7. 前端用户控制
-
-前端“我的”页已支持：
-
-- 查看 AI 推荐偏好。
-- 查看 AI 对话摘要。
-- 查看 AI 最近对话。
-- 删除单条 AI 偏好/摘要。
-- 一键清除全部 AI 长期记忆：`DELETE /ai/memories`。
-- 清空 AI 对话历史：`DELETE /ai/conversations`。
-
-AI 聊天窗口已支持：
-
-- 未登录用户：聊天历史只保存在前端本地。
-- 登录用户：聊天历史保存到后端数据库。
-- 后端返回 `memoryUpdated=true` 时，前端刷新 AI 记忆。
-- 成功对话后，前端刷新最近 AI 对话预览。
-
-## 8. 当前 API
-
-| API | 说明 | 登录 |
-|---|---|---|
-| `POST /ai/chat` | AI 对话入口 | 可匿名 |
-| `GET /ai/conversations/recent?limit=20` | 最近 AI 对话 | 需要 |
-| `DELETE /ai/conversations` | 清空当前用户 AI 对话历史 | 需要 |
-| `GET /ai/memories` | 查询当前用户 AI 记忆 | 需要 |
-| `DELETE /ai/memories/{memoryKey}` | 删除单条 AI 记忆 | 需要 |
-| `DELETE /ai/memories` | 清空当前用户全部 AI 记忆 | 需要 |
-
-Tool 观测：
-
-- `POST /ai/chat` 返回 `usedTools`。
-- 当前 `usedTools` 记录后端确定性预筛选的工具使用，例如 `recommendShops`。
-- AI 聊天窗口在 `usedTools` 包含 `recommendShops` 时显示“已查询推荐候选”提示。
-- 未登录用户的前端本地聊天历史会保留 `usedTools`。
-- 登录用户的 assistant 历史消息会在 `tb_ai_conversation_*`.`metadata` 中持久化 `usedTools`，需要执行 `sql/migrate_ai_conversation_metadata.sql`。
-- 旧数据没有 `metadata` 时，前端仍会在历史 assistant 文本包含 `spotai://shop/{id}` 链接时恢复推荐工具提示。
-- 登录用户调用 `searchShop`、`queryShopDetail`、`recommendShops`、`queryReviewSummary`、`queryCoupons` 时，会写入 `tb_ai_tool_call_log_*`，记录工具名、风险等级、输入输出、目标对象和状态。
-- 匿名用户不会写工具调用日志。
+| 方法 | 路径 | 登录 | 说明 |
+| --- | --- | --- | --- |
+| `POST` | `/ai/chat` | 可匿名 | AI 对话入口 |
+| `GET` | `/ai/conversations/recent` | 是 | 查询最近 AI 对话 |
+| `DELETE` | `/ai/conversations` | 是 | 清空当前用户 AI 对话 |
+| `GET` | `/ai/memories` | 是 | 查询当前用户 AI 记忆 |
+| `DELETE` | `/ai/memories/{memoryKey}` | 是 | 删除单条 AI 记忆 |
+| `DELETE` | `/ai/memories` | 是 | 清空 AI 记忆 |
+| `POST` | `/ai/tool/confirm` | 是 | 确认或拒绝中风险工具调用 |
 
 ## 9. 当前边界
 
-- 目前是单 `ChatClient + tools` 的第一版 Agent 机制，还不是完整 Graph 编排。
-- 高风险动作仍不应由模型直接执行，例如下单、退款、取消订单。
-- 低风险 Tool 调用日志已落地；中高风险确认卡片和 confirm token 校验仍是后续阶段。
+- 当前不是多 Agent Graph 编排，而是“单协调器 + 工具调用 + 记忆服务”模式。
+- 长期记忆不是官方 MemoryStore 直接落地，而是项目自建 MySQL 实现。
+- AI 推荐依赖当前数据库中的店铺、评价摘要和优惠券数据；数据不足时推荐质量会受影响。
+- 工具确认当前覆盖普通代金券领取，秒杀下单仍走前端业务页面。
 
-已新增 `claimCoupon` 作为中风险工具。流程：
+## 10. 相关测试
 
-1. AI 调用 `claimCoupon(voucherId)`。
-2. 后端检测到 `medium` 风险等级，不执行操作，生成 `confirmToken`，写入 `tb_ai_tool_call_log_*` 状态为 `pending`。
-3. 后端返回 `{"status":"CONFIRM_REQUIRED","toolName":"claimCoupon","confirmToken":"xxx"}`。
-4. 前端展示确认卡片。
-5. 用户点击确认 → `POST /ai/tool/confirm`。
-6. 后端查找日志 → 校验用户 → 执行 `voucherService.claimVoucher(voucherId)` → 更新日志状态为 `confirmed`。
-7. 返回操作结果。
+重点测试类：
 
-- Spring AI Alibaba 的长期 MemoryStore 暂未直接替换 MySQL 实现；当前使用 `UserMemoryStore` 保持 namespace/key 语义，后续可以替换底层存储。
-- Redis/JDBC ChatMemory 可作为后续短期记忆持久化方向；当前代码已通过接口注入留出替换点。
-
-## 10. 已覆盖测试
-
-主要测试类：
-
-- `ToolConfirmServiceTest`
-- `SpringAiChatServiceTest`
-- `AiShortTermMemoryServiceTest`
-- `AiContextWindowServiceTest`
-- `SpringAiPreferenceExtractorAgentTest`
-- `SpringAiConversationSummaryAgentTest`
-- `RecommendationPreferenceResolverTest`
-- `AgentMemorySelectionPolicyTest`
-- `MysqlUserMemoryStoreTest`
 - `SpotAiChatToolsTest`
+- `SpringAiChatServiceTest`
+- `SpringAiPreferenceExtractorAgentTest`
+- `AiContextWindowServiceTest`
+- `AiShortTermMemoryServiceTest`
+- `MysqlUserMemoryStoreTest`
 - `AiChatControllerTest`
 - `AiChatControllerAuthTest`
-
-常用验证命令：
-
-```powershell
-mvn -q "-Dtest=AiShortTermMemoryServiceTest,AiContextWindowServiceTest,AiChatControllerAuthTest,AiChatControllerTest,SpringAiChatServiceTest,SpringAiConversationSummaryAgentTest,SpringAiPreferenceExtractorAgentTest,RecommendationPreferenceResolverTest,AgentMemorySelectionPolicyTest,UserMemoryKeyTest,MysqlUserMemoryStoreTest,SpotAiChatToolsTest" test
-```
-
-```powershell
-mvn -q test
-```
